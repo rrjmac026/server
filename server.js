@@ -6,7 +6,7 @@ require("dotenv").config();
 const app = express();
 const port = process.env.PORT || 3000;
 
-// ✅ 1. Handle Missing Firestore Credentials Gracefully
+// Handle Missing Firestore Credentials Gracefully
 if (!process.env.FIREBASE_CREDENTIALS) {
   console.error("❌ FIREBASE_CREDENTIALS is missing. Make sure to set it in environment variables.");
   process.exit(1); // Exit the app to prevent unexpected behavior
@@ -20,24 +20,25 @@ admin.initializeApp({
 
 const db = admin.firestore();
 
-// ✅ Middleware
+// Middleware
 app.use(cors());
 app.use(express.json());
 
-// ✅ 2. Handle JSON Parsing Errors
-app.use((err, req, res, next) => {
-  if (err instanceof SyntaxError) {
-    return res.status(400).json({ error: "Invalid JSON format" });
+// Log all requests (Ensures all requests are visible in Render logs)
+app.use((req, res, next) => {
+  console.error(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  if (Object.keys(req.body).length) {
+    console.error("📩 Request Body:", JSON.stringify(req.body, null, 2));
   }
   next();
 });
 
-// ✅ 3. Health Check Route
+// Health Check Route
 app.get("/api/health", (req, res) => {
   res.json({ status: "Server is running" });
 });
 
-// ✅ 4. Get All Plants
+// Get All Plants
 app.get("/api/plants", async (req, res) => {
   try {
     const plantsSnapshot = await db.collection("plants").get();
@@ -45,56 +46,60 @@ app.get("/api/plants", async (req, res) => {
       id: doc.id,
       ...doc.data(),
     }));
+
+    console.error(`🌱 Retrieved ${plants.length} plants`);
     res.json(plants);
   } catch (error) {
+    console.error("❌ Error fetching plants:", error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// ✅ 5. Store Sensor Data with Validation
+// Store Sensor Data with Validation
 app.post("/api/sensor-data", async (req, res) => {
   try {
     const { moisture, temperature, plantId } = req.body;
 
-    // ✅ Validate input
-    if (
-      typeof moisture !== "number" ||
-      typeof temperature !== "number" ||
-      typeof plantId !== "string"
-    ) {
+    // Validate input
+    if (typeof moisture !== "number" || typeof temperature !== "number" || typeof plantId !== "string") {
+      console.error("❌ Validation Error: Invalid input data");
       return res.status(400).json({ error: "Invalid input data" });
     }
 
     const timestamp = admin.firestore.FieldValue.serverTimestamp();
 
-    await db.collection("sensor_data").add({
+    const newDoc = await db.collection("sensor_data").add({
       moisture,
       temperature,
       plantId,
       timestamp,
     });
 
-    // ✅ Trigger a notification if moisture is low
+    console.error(`✅ Sensor data stored (ID: ${newDoc.id}) for plant ${plantId}`);
+
+    // Trigger a notification if moisture is low
     if (moisture < 30) {
+      console.error(`⚠️ Low moisture detected for Plant ID: ${plantId}. Creating notification.`);
       await createNotification(plantId, "Low moisture level detected!");
     }
 
     res.json({ message: "Sensor data recorded successfully" });
   } catch (error) {
+    console.error("❌ Error storing sensor data:", error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// ✅ 6. Get Notifications for a User (Fix Firestore Query Issue)
+// Get Notifications for a User
 app.get("/api/notifications/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
 
-    // ✅ Ensure Firestore index exists (Firestore requires a composite index for `where()` + `orderBy()`)
+    // Ensure Firestore index exists (Firestore requires a composite index for `where()` + `orderBy()`)
     const notificationsSnapshot = await db
       .collection("notifications")
       .where("userId", "==", userId)
-      .orderBy("timestamp", "desc") // Firestore requires an index for this
+      .orderBy("timestamp", "desc")
       .limit(50)
       .get();
 
@@ -103,13 +108,15 @@ app.get("/api/notifications/:userId", async (req, res) => {
       ...doc.data(),
     }));
 
+    console.error(`🔔 Retrieved ${notifications.length} notifications for user ${userId}`);
     res.json(notifications);
   } catch (error) {
+    console.error("❌ Error fetching notifications:", error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// ✅ 7. Create Notifications in Firestore
+// Create Notifications in Firestore
 async function createNotification(plantId, message) {
   try {
     const plantDoc = await db.collection("plants").doc(plantId).get();
@@ -121,7 +128,7 @@ async function createNotification(plantId, message) {
 
     const { userId } = plantDoc.data(); // Extract userId from the plant document
 
-    await db.collection("notifications").add({
+    const notificationRef = await db.collection("notifications").add({
       userId,
       plantId,
       message,
@@ -129,13 +136,22 @@ async function createNotification(plantId, message) {
       read: false,
     });
 
-    console.log(`✅ Notification sent to user ${userId}: ${message}`);
+    console.error(`✅ Notification sent to user ${userId} (ID: ${notificationRef.id}): ${message}`);
   } catch (error) {
     console.error("❌ Error creating notification:", error);
   }
 }
 
-// ✅ 8. Start Express Server
+// Handle JSON Parsing Errors
+app.use((err, req, res, next) => {
+  if (err instanceof SyntaxError) {
+    console.error("❌ JSON Parsing Error:", err);
+    return res.status(400).json({ error: "Invalid JSON format" });
+  }
+  next();
+});
+
+// Start Express Server
 app.listen(port, () => {
-  console.log(`🚀 Server running on port ${port}`);
+  console.error(`🚀 Server running on port ${port}`);
 });
