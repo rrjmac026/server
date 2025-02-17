@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
 require("dotenv").config();
+const PDFDocument = require('pdfkit');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -133,6 +134,39 @@ app.use((err, req, res, next) => {
     return res.status(400).json({ error: "Invalid JSON format" });
   }
   next();
+});
+
+// Generate PDF Report
+app.get("/api/reports/:plantId/download", async (req, res) => {
+  try {
+    const { plantId } = req.params;
+    const { start, end } = req.query;
+    
+    console.error(`📑 Generating PDF report for plant ${plantId}`);
+    
+    // Set response headers for PDF download
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 
+      `attachment; filename=plant_report_${plantId}_${start}_to_${end}.pdf`);
+
+    // Create PDF document
+    const doc = new PDFDocument();
+    doc.pipe(res);
+
+    // Add content to PDF
+    doc.fontSize(25)
+       .text('Plant Report', { align: 'center' })
+       .moveDown();
+
+    // Add more content...
+    
+    // Finalize PDF file
+    doc.end();
+    
+  } catch (error) {
+    console.error("❌ Error generating PDF:", error);
+    res.status(500).json({ error: "Error generating PDF: " + error.message });
+  }
 });
 
 // Start Express Server
