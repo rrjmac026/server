@@ -5,7 +5,6 @@ require("dotenv").config();
 
 const app = express();
 const port = process.env.PORT || 3000;
-const router = express.Router();
 
 // Handle Missing Firestore Credentials Gracefully
 if (!process.env.FIREBASE_CREDENTIALS) {
@@ -25,7 +24,7 @@ const db = admin.firestore();
 app.use(cors());
 app.use(express.json());
 
-// Log all requests (Ensures logging middleware runs before routes)
+// Log all requests
 app.use((req, res, next) => {
   console.error(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
   if (Object.keys(req.body).length) {
@@ -89,7 +88,7 @@ app.post("/api/sensor-data", async (req, res) => {
 });
 
 // Get Plant Report
-router.get("/api/reports/:plantId", async (req, res) => {
+app.get("/api/reports/:plantId", async (req, res) => {
   try {
     const { plantId } = req.params;
     const { start, end } = req.query;
@@ -136,7 +135,7 @@ function calculateAverage(values) {
 }
 
 // Download Report as PDF (Placeholder)
-router.get("/api/reports/:plantId/download", async (req, res) => {
+app.get("/api/reports/:plantId/download", async (req, res) => {
   try {
     const { plantId } = req.params;
     const { start, end } = req.query;
@@ -216,13 +215,7 @@ app.use((err, req, res, next) => {
   next();
 });
 
-// Import and use external routes
-const reportRoutes = require("./routes/reports");
-app.use(reportRoutes);
-
-// Use the router AFTER defining all routes
-app.use(router);
-
+// Start Express Server
 app.listen(port, () => {
   console.error(`🚀 Server running on port ${port}`);
 });
