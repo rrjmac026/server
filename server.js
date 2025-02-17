@@ -5,11 +5,12 @@ require("dotenv").config();
 
 const app = express();
 const port = process.env.PORT || 3000;
+const router = express.Router();
 
 // Handle Missing Firestore Credentials Gracefully
 if (!process.env.FIREBASE_CREDENTIALS) {
   console.error("❌ FIREBASE_CREDENTIALS is missing. Make sure to set it in environment variables.");
-  process.exit(1); // Exit the app to prevent unexpected behavior
+  process.exit(1);
 }
 
 // Initialize Firebase Admin
@@ -24,7 +25,7 @@ const db = admin.firestore();
 app.use(cors());
 app.use(express.json());
 
-// Log all requests (Ensures all requests are visible in Render logs)
+// Log all requests (Ensures logging middleware runs before routes)
 app.use((req, res, next) => {
   console.error(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
   if (Object.keys(req.body).length) {
@@ -60,14 +61,12 @@ app.post("/api/sensor-data", async (req, res) => {
   try {
     const { moisture, temperature, plantId } = req.body;
 
-    // Validate input
     if (typeof moisture !== "number" || typeof temperature !== "number" || typeof plantId !== "string") {
       console.error("❌ Validation Error: Invalid input data");
       return res.status(400).json({ error: "Invalid input data" });
     }
 
     const timestamp = admin.firestore.FieldValue.serverTimestamp();
-
     const newDoc = await db.collection("sensor_data").add({
       moisture,
       temperature,
@@ -77,7 +76,6 @@ app.post("/api/sensor-data", async (req, res) => {
 
     console.error(`✅ Sensor data stored (ID: ${newDoc.id}) for plant ${plantId}`);
 
-    // Trigger a notification if moisture is low
     if (moisture < 30) {
       console.error(`⚠️ Low moisture detected for Plant ID: ${plantId}. Creating notification.`);
       await createNotification(plantId, "Low moisture level detected!");
@@ -90,12 +88,80 @@ app.post("/api/sensor-data", async (req, res) => {
   }
 });
 
+// Get Plant Report
+router.get("/api/reports/:plantId", async (req, res) => {
+  try {
+    const { plantId } = req.params;
+    const { start, end } = req.query;
+
+    if (!start || !end) {
+      return res.status(400).json({ error: "Start and end date are required." });
+    }
+
+    const sensorDataSnapshot = await db
+      .collection("sensor_data")
+      .where("plantId", "==", plantId)
+      .where("timestamp", ">=", new Date(start))
+      .where("timestamp", "<=", new Date(end))
+      .get();
+
+    const sensorData = sensorDataSnapshot.docs.map((doc) => doc.data());
+
+    if (sensorData.length === 0) {
+      return res.status(404).json({ error: "No data found for the given date range." });
+    }
+
+    const report = {
+      plantId,
+      startDate: new Date(start),
+      endDate: new Date(end),
+      averageMoisture: calculateAverage(sensorData.map((d) => d.moisture)),
+      averageTemperature: calculateAverage(sensorData.map((d) => d.temperature)),
+      wateringCount: 0,
+      fertilizingCount: 0,
+      historicalData: sensorData,
+    };
+
+    res.json(report);
+  } catch (error) {
+    console.error("❌ Error generating report:", error);
+    res.status(500).json({ error: "Error generating report" });
+  }
+});
+
+// Helper function to calculate average
+function calculateAverage(values) {
+  if (!values.length) return 0;
+  return values.reduce((a, b) => a + b) / values.length;
+}
+
+// Download Report as PDF (Placeholder)
+router.get("/api/reports/:plantId/download", async (req, res) => {
+  try {
+    const { plantId } = req.params;
+    const { start, end } = req.query;
+
+    if (!start || !end) {
+      return res.status(400).json({ error: "Start and end date are required." });
+    }
+
+    console.error(`📄 PDF report requested for Plant ID: ${plantId} from ${start} to ${end}`);
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename=plant_report_${plantId}.pdf`);
+
+    res.status(501).json({ error: "PDF generation not implemented yet" });
+  } catch (error) {
+    console.error("❌ Error generating PDF report:", error);
+    res.status(500).json({ error: "Error generating PDF report" });
+  }
+});
+
 // Get Notifications for a User
 app.get("/api/notifications/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
 
-    // Ensure Firestore index exists (Firestore requires a composite index for `where()` + `orderBy()`)
     const notificationsSnapshot = await db
       .collection("notifications")
       .where("userId", "==", userId)
@@ -126,8 +192,7 @@ async function createNotification(plantId, message) {
       return;
     }
 
-    const { userId } = plantDoc.data(); // Extract userId from the plant document
-
+    const { userId } = plantDoc.data();
     const notificationRef = await db.collection("notifications").add({
       userId,
       plantId,
@@ -151,7 +216,13 @@ app.use((err, req, res, next) => {
   next();
 });
 
-// Start Express Server
+// Import and use external routes
+const reportRoutes = require("./routes/reports");
+app.use(reportRoutes);
+
+// Use the router AFTER defining all routes
+app.use(router);
+
 app.listen(port, () => {
   console.error(`🚀 Server running on port ${port}`);
 });
