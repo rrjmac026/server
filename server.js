@@ -42,15 +42,9 @@ app.get("/api/health", (req, res) => {
 app.get("/api/plants", async (req, res) => {
   try {
     const plantsSnapshot = await db.collection("plants").get();
-    const plants = plantsSnapshot.docs.map((doc) => ({
-      id: doc.id,
-      ...doc.data(),
-    }));
-
-    console.error(`🌱 Retrieved ${plants.length} plants`);
+    const plants = plantsSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
     res.json(plants);
   } catch (error) {
-    console.error("❌ Error fetching plants:", error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -59,157 +53,83 @@ app.get("/api/plants", async (req, res) => {
 app.post("/api/sensor-data", async (req, res) => {
   try {
     const { moisture, temperature, plantId } = req.body;
-
     if (typeof moisture !== "number" || typeof temperature !== "number" || typeof plantId !== "string") {
-      console.error("❌ Validation Error: Invalid input data");
       return res.status(400).json({ error: "Invalid input data" });
     }
-
     const timestamp = admin.firestore.FieldValue.serverTimestamp();
-    const newDoc = await db.collection("sensor_data").add({
-      moisture,
-      temperature,
-      plantId,
-      timestamp,
-    });
-
-    console.error(`✅ Sensor data stored (ID: ${newDoc.id}) for plant ${plantId}`);
-
-    if (moisture < 30) {
-      console.error(`⚠️ Low moisture detected for Plant ID: ${plantId}. Creating notification.`);
-      await createNotification(plantId, "Low moisture level detected!");
-    }
-
+    await db.collection("sensor_data").add({ moisture, temperature, plantId, timestamp });
     res.json({ message: "Sensor data recorded successfully" });
   } catch (error) {
-    console.error("❌ Error storing sensor data:", error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// Get Plant Report
+// Get Plant Report with Index Check
 app.get("/api/reports/:plantId", async (req, res) => {
   try {
     const { plantId } = req.params;
     const { start, end } = req.query;
-
     if (!start || !end) {
       return res.status(400).json({ error: "Start and end date are required." });
     }
-
-    const sensorDataSnapshot = await db
-      .collection("sensor_data")
+    
+    // Check if Firestore index is ready
+    const indexStatus = await db.collection("sensor_data")
       .where("plantId", "==", plantId)
-      .where("timestamp", ">=", new Date(start))
-      .where("timestamp", "<=", new Date(end))
+      .orderBy("timestamp")
+      .limit(1)
+      .get()
+      .then(() => "ready")
+      .catch(error => (error.code === 9 ? "building" : "error"));
+
+    if (indexStatus === "building") {
+      return res.status(503).json({ error: "Database index is being built. Please try again later." });
+    }
+
+    // Query sensor data
+    const startDate = new Date(start);
+    const endDate = new Date(end);
+    const snapshot = await db.collection("sensor_data")
+      .where("plantId", "==", plantId)
+      .where("timestamp", ">=", startDate)
+      .where("timestamp", "<=", endDate)
+      .orderBy("timestamp")
       .get();
 
-    const sensorData = sensorDataSnapshot.docs.map((doc) => doc.data());
-
-    if (sensorData.length === 0) {
-      return res.status(404).json({ error: "No data found for the given date range." });
+    if (snapshot.empty) {
+      return res.status(404).json({ error: "No data found for the specified period" });
     }
+
+    // Calculate averages
+    let totalMoisture = 0;
+    let totalTemperature = 0;
+    const readings = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      totalMoisture += data.moisture;
+      totalTemperature += data.temperature;
+      readings.push(data);
+    });
 
     const report = {
       plantId,
-      startDate: new Date(start),
-      endDate: new Date(end),
-      averageMoisture: calculateAverage(sensorData.map((d) => d.moisture)),
-      averageTemperature: calculateAverage(sensorData.map((d) => d.temperature)),
-      wateringCount: 0,
+      startDate,
+      endDate,
+      averageMoisture: totalMoisture / readings.length,
+      averageTemperature: totalTemperature / readings.length,
+      wateringCount: readings.length,
       fertilizingCount: 0,
-      historicalData: sensorData,
+      historicalData: readings,
     };
-
     res.json(report);
   } catch (error) {
-    console.error("❌ Error generating report:", error);
-    res.status(500).json({ error: "Error generating report" });
+    res.status(500).json({ error: "Error generating report: " + error.message });
   }
 });
-
-// Helper function to calculate average
-function calculateAverage(values) {
-  if (!values.length) return 0;
-  return values.reduce((a, b) => a + b) / values.length;
-}
-
-// Download Report as PDF (Placeholder)
-app.get("/api/reports/:plantId/download", async (req, res) => {
-  try {
-    const { plantId } = req.params;
-    const { start, end } = req.query;
-
-    if (!start || !end) {
-      return res.status(400).json({ error: "Start and end date are required." });
-    }
-
-    console.error(`📄 PDF report requested for Plant ID: ${plantId} from ${start} to ${end}`);
-
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename=plant_report_${plantId}.pdf`);
-
-    res.status(501).json({ error: "PDF generation not implemented yet" });
-  } catch (error) {
-    console.error("❌ Error generating PDF report:", error);
-    res.status(500).json({ error: "Error generating PDF report" });
-  }
-});
-
-// Get Notifications for a User
-app.get("/api/notifications/:userId", async (req, res) => {
-  try {
-    const { userId } = req.params;
-
-    const notificationsSnapshot = await db
-      .collection("notifications")
-      .where("userId", "==", userId)
-      .orderBy("timestamp", "desc")
-      .limit(50)
-      .get();
-
-    const notifications = notificationsSnapshot.docs.map((doc) => ({
-      id: doc.id,
-      ...doc.data(),
-    }));
-
-    console.error(`🔔 Retrieved ${notifications.length} notifications for user ${userId}`);
-    res.json(notifications);
-  } catch (error) {
-    console.error("❌ Error fetching notifications:", error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Create Notifications in Firestore
-async function createNotification(plantId, message) {
-  try {
-    const plantDoc = await db.collection("plants").doc(plantId).get();
-
-    if (!plantDoc.exists) {
-      console.error(`❌ Plant with ID ${plantId} not found.`);
-      return;
-    }
-
-    const { userId } = plantDoc.data();
-    const notificationRef = await db.collection("notifications").add({
-      userId,
-      plantId,
-      message,
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
-      read: false,
-    });
-
-    console.error(`✅ Notification sent to user ${userId} (ID: ${notificationRef.id}): ${message}`);
-  } catch (error) {
-    console.error("❌ Error creating notification:", error);
-  }
-}
 
 // Handle JSON Parsing Errors
 app.use((err, req, res, next) => {
   if (err instanceof SyntaxError) {
-    console.error("❌ JSON Parsing Error:", err);
     return res.status(400).json({ error: "Invalid JSON format" });
   }
   next();
