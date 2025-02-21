@@ -2,14 +2,14 @@ const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
 require("dotenv").config();
-const PDFDocument = require('pdfkit');
+const PDFDocument = require("pdfkit");
 
 const app = express();
 const port = process.env.PORT || 3000;
 
 // Handle Missing Firestore Credentials Gracefully
 if (!process.env.FIREBASE_CREDENTIALS) {
-  console.error("❌ FIREBASE_CREDENTIALS is missing. Make sure to set it in environment variables.");
+  console.error("FIREBASE_CREDENTIALS is missing. Make sure to set it in environment variables.");
   process.exit(1);
 }
 
@@ -29,36 +29,40 @@ app.use(express.json());
 app.use((req, res, next) => {
   console.error(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
   if (Object.keys(req.body).length) {
-    console.error("📩 Request Body:", JSON.stringify(req.body, null, 2));
+    console.error("Request Body:", JSON.stringify(req.body, null, 2));
   }
   next();
 });
 
+// ======================
 // Health Check Route
+// ======================
 app.get("/api/health", (req, res) => {
   res.json({ status: "Server is running" });
 });
 
+// ======================
 // Plants Routes
+// ======================
 app.get("/api/plants", async (req, res) => {
   try {
-    console.error("📋 Fetching all plants");
+    console.error("Fetching all plants");
     const plantsSnapshot = await db.collection("plants").get();
-    
+
     if (plantsSnapshot.empty) {
-      console.error("❌ No plants found");
-      return res.json([]); // Return empty array if no plants
+      console.error("No plants found");
+      return res.json([]);
     }
 
-    const plants = plantsSnapshot.docs.map(doc => ({
+    const plants = plantsSnapshot.docs.map((doc) => ({
       id: doc.id,
-      ...doc.data()
+      ...doc.data(),
     }));
 
-    console.error(`✅ Found ${plants.length} plants`);
+    console.error(`Found ${plants.length} plants`);
     res.json(plants);
   } catch (error) {
-    console.error("❌ Error fetching plants:", error);
+    console.error("Error fetching plants:", error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -66,105 +70,104 @@ app.get("/api/plants", async (req, res) => {
 app.get("/api/plants/:plantId", async (req, res) => {
   try {
     const { plantId } = req.params;
-    console.error(`📋 Fetching plant ${plantId}`);
+    console.error(`Fetching plant ${plantId}`);
 
     const plantDoc = await db.collection("plants").doc(plantId).get();
-    
+
     if (!plantDoc.exists) {
-      console.error(`❌ Plant ${plantId} not found`);
+      console.error(`Plant ${plantId} not found`);
       return res.status(404).json({ error: "Plant not found" });
     }
 
     const plant = {
       id: plantDoc.id,
-      ...plantDoc.data()
+      ...plantDoc.data(),
     };
 
-    console.error(`✅ Found plant ${plantId}`);
+    console.error(`Found plant ${plantId}`);
     res.json(plant);
   } catch (error) {
-    console.error("❌ Error fetching plant:", error);
+    console.error("Error fetching plant:", error);
     res.status(500).json({ error: error.message });
   }
 });
 
+// ======================
 // Sensor Data Routes
+// ======================
 app.post("/api/sensor-data", async (req, res) => {
   try {
     const { moisture, temperature, plantId } = req.body;
-    console.error(`📥 Received sensor data for plant ${plantId}:`);
-    console.error(`   Moisture: ${moisture}%`);
-    console.error(`   Temperature: ${temperature}°C`);
+    console.error(`Received sensor data for plant ${plantId}:`);
+    console.error(`Moisture: ${moisture}%, Temperature: ${temperature}°C`);
 
     // Validate input
     if (typeof moisture !== "number" || typeof temperature !== "number" || typeof plantId !== "string") {
       return res.status(400).json({ error: "Invalid input data" });
     }
 
-    // Add timestamp
-    const timestamp = admin.firestore.FieldValue.serverTimestamp();
-    
-    // Store in Firestore
+    const timestamp = admin.firestore.Timestamp.now();
+
     const docRef = await db.collection("sensor_data").add({
       moisture,
       temperature,
       plantId,
-      timestamp
+      timestamp,
     });
 
-    console.error(`✅ Sensor data stored (ID: ${docRef.id})`);
+    console.error(`Sensor data stored with timestamp ${timestamp.toDate()} (ID: ${docRef.id})`);
     res.json({ message: "Sensor data recorded successfully", id: docRef.id });
   } catch (error) {
-    console.error("❌ Error storing sensor data:", error);
+    console.error("Error storing sensor data:", error);
     res.status(500).json({ error: error.message });
   }
 });
 
+// ======================
 // Report Routes
+// ======================
 app.get("/api/reports/:plantId", async (req, res) => {
   try {
     const { plantId } = req.params;
     const { start, end } = req.query;
+
     if (!start || !end) {
       return res.status(400).json({ error: "Start and end date are required." });
     }
 
-    // Check if Firestore index is ready
-    const indexStatus = await db.collection("sensor_data")
-      .where("plantId", "==", plantId)
-      .orderBy("timestamp")
-      .limit(1)
-      .get()
-      .then(() => "ready")
-      .catch(error => (error.code === 9 ? "building" : "error"));
+    console.error(`Generating report for plant ${plantId} from ${start} to ${end}`);
 
-    if (indexStatus === "building") {
-      return res.status(503).json({ error: "Database index is being built. Please try again later." });
-    }
-
-    // Query sensor data
     const startDate = new Date(start);
+    startDate.setHours(0, 0, 0, 0);
     const endDate = new Date(end);
-    const snapshot = await db.collection("sensor_data")
+    endDate.setHours(23, 59, 59, 999);
+
+    const snapshot = await db
+      .collection("sensor_data")
       .where("plantId", "==", plantId)
-      .where("timestamp", ">=", startDate)
-      .where("timestamp", "<=", endDate)
+      .where("timestamp", ">=", admin.firestore.Timestamp.fromDate(startDate))
+      .where("timestamp", "<=", admin.firestore.Timestamp.fromDate(endDate))
       .orderBy("timestamp")
       .get();
+
+    console.error(`Found ${snapshot.size} readings`);
 
     if (snapshot.empty) {
       return res.status(404).json({ error: "No data found for the specified period" });
     }
 
-    // Calculate averages
     let totalMoisture = 0;
     let totalTemperature = 0;
     const readings = [];
-    snapshot.forEach(doc => {
+
+    snapshot.forEach((doc) => {
       const data = doc.data();
       totalMoisture += data.moisture;
       totalTemperature += data.temperature;
-      readings.push(data);
+      readings.push({
+        ...data,
+        timestamp: data.timestamp.toDate(),
+      });
     });
 
     const report = {
@@ -177,65 +180,58 @@ app.get("/api/reports/:plantId", async (req, res) => {
       fertilizingCount: 0,
       historicalData: readings,
     };
+
+    console.error("Generated report:", report);
     res.json(report);
   } catch (error) {
+    console.error("Error generating report:", error);
     res.status(500).json({ error: "Error generating report: " + error.message });
   }
 });
 
+// ======================
 // Generate PDF Report
+// ======================
 app.get("/api/reports/:plantId/download", async (req, res) => {
   try {
     const { plantId } = req.params;
     const { start, end } = req.query;
 
-    console.error(`📑 Generating PDF report for plant ${plantId}`);
-    
-    // Query sensor data
+    console.error(`Generating PDF report for plant ${plantId}`);
+
     const startDate = new Date(start);
     const endDate = new Date(end);
-    
-    const snapshot = await db.collection("sensor_data")
+
+    const snapshot = await db
+      .collection("sensor_data")
       .where("plantId", "==", plantId)
       .where("timestamp", ">=", admin.firestore.Timestamp.fromDate(startDate))
       .where("timestamp", "<=", admin.firestore.Timestamp.fromDate(endDate))
       .orderBy("timestamp")
       .get();
 
-    // Create PDF document
     const doc = new PDFDocument();
-    
-    // Set response headers
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 
-        `attachment; filename=plant_report_${plantId}_${start}_to_${end}.pdf`);
 
-    // Pipe the PDF directly to the response
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename=plant_report_${plantId}_${start}_to_${end}.pdf`);
+
     doc.pipe(res);
 
-    // Add content to PDF
-    doc.fontSize(25)
-       .text('Plant Report', { align: 'center' })
-       .moveDown();
+    doc.fontSize(25).text("Plant Report", { align: "center" }).moveDown();
+    doc.fontSize(14).text(`Plant ID: ${plantId}`).text(`Period: ${start} to ${end}`).moveDown();
 
-    doc.fontSize(14)
-       .text(`Plant ID: ${plantId}`)
-       .text(`Period: ${start} to ${end}`)
-       .moveDown();
-
-    // Add sensor data
     if (!snapshot.empty) {
       let totalMoisture = 0;
       let totalTemperature = 0;
       const readings = [];
 
-      snapshot.forEach(doc => {
+      snapshot.forEach((doc) => {
         const data = doc.data();
         totalMoisture += data.moisture;
         totalTemperature += data.temperature;
         readings.push({
           ...data,
-          timestamp: data.timestamp.toDate()
+          timestamp: data.timestamp.toDate(),
         });
       });
 
@@ -243,67 +239,63 @@ app.get("/api/reports/:plantId/download", async (req, res) => {
       const avgTemperature = totalTemperature / readings.length;
 
       doc.text(`Average Moisture: ${avgMoisture.toFixed(1)}%`)
-         .text(`Average Temperature: ${avgTemperature.toFixed(1)}°C`)
-         .text(`Number of Readings: ${readings.length}`)
-         .moveDown();
+        .text(`Average Temperature: ${avgTemperature.toFixed(1)}°C`)
+        .text(`Number of Readings: ${readings.length}`)
+        .moveDown();
 
-      doc.fontSize(12)
-         .text('Detailed Readings:', { underline: true })
-         .moveDown();
+      doc.fontSize(12).text("Detailed Readings:", { underline: true }).moveDown();
 
       readings.forEach((reading, index) => {
         if (index > 0 && index % 20 === 0) doc.addPage();
-        doc.text(`${new Date(reading.timestamp).toLocaleString()}: ` +
-                `Moisture: ${reading.moisture.toFixed(1)}%, ` +
-                `Temperature: ${reading.temperature.toFixed(1)}°C`);
+        doc.text(
+          `${new Date(reading.timestamp).toLocaleString()}: Moisture: ${reading.moisture.toFixed(1)}%, Temperature: ${reading.temperature.toFixed(1)}°C`
+        );
       });
     } else {
-      doc.text('No readings found for this period');
+      doc.text("No readings found for this period");
     }
 
-    // Add footer
-    doc.moveDown()
-       .fontSize(10)
-       .text('Generated by Plant Monitoring System', { align: 'center' });
-
-    // Finalize PDF
+    doc.moveDown().fontSize(10).text("Generated by Plant Monitoring System", { align: "center" });
     doc.end();
 
-    console.error('✅ PDF generated and sent successfully');
+    console.error("PDF generated and sent successfully");
   } catch (error) {
-    console.error('❌ Error generating PDF:', error);
-    res.status(500).json({ error: 'Error generating PDF: ' + error.message });
+    console.error("Error generating PDF:", error);
+    res.status(500).json({ error: "Error generating PDF: " + error.message });
   }
 });
 
+// ======================
 // Test Data Setup Route
+// ======================
 app.post("/api/setup-test-data", async (req, res) => {
   try {
     const plantsSnapshot = await db.collection("plants").get();
-    
+
     if (plantsSnapshot.empty) {
-      // Add test plant if no plants exist
       await db.collection("plants").doc("plant123").set({
         name: "Test Plant",
         type: "Indoor Plant",
         userId: "testuser",
         lastWatered: Date.now(),
         soilMoisture: 65,
-        temperature: 22
+        temperature: 22,
       });
 
-      console.error("✅ Test data created");
+      console.error("Test data created");
       res.json({ message: "Test data created successfully" });
     } else {
       res.json({ message: "Test data already exists" });
     }
   } catch (error) {
-    console.error("❌ Error setting up test data:", error);
+    console.error("Error setting up test data:", error);
     res.status(500).json({ error: error.message });
   }
 });
 
+// ======================
 // Start Server
+// ======================
 app.listen(port, () => {
-  console.error(`🚀 Server running on port ${port}`);
+  console.error(`Server running on port ${port}`);
 });
