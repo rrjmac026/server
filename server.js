@@ -44,35 +44,23 @@ app.post("/api/sensor-data", async (req, res) => {
     console.log("📩 Received Sensor Data:", req.body);
 
     const { moisture, temperature, humidity, plantId, moistureStatus } = req.body;
-
-    // ✅ Validate input data
-    if (
-      typeof moisture !== "number" ||
-      typeof temperature !== "number" ||
-      typeof humidity !== "number" ||
-      typeof plantId !== "string" ||
-      typeof moistureStatus !== "string"
-    ) {
+    if (!moisture || !temperature || !humidity || !plantId || !moistureStatus) {
       return res.status(400).json({ error: "❌ Invalid input data" });
     }
 
-    // ✅ Store in Firestore
     await db.collection("sensor_data").add({
-      moisture,
-      temperature,
-      humidity,
-      plantId,
-      moistureStatus,
+      moisture, temperature, humidity, plantId, moistureStatus,
       timestamp: admin.firestore.Timestamp.now(),
     });
 
-    console.log("✅ Sensor data successfully stored in Firestore!");
-    res.json({ message: "✅ Sensor data recorded successfully" });
+    console.log("✅ Data stored in Firestore!");
+    res.json({ message: "Sensor data recorded successfully" });
   } catch (error) {
-    console.error("❌ Error storing sensor data:", error);
+    console.error("❌ Error storing data:", error);
     res.status(500).json({ error: error.message });
   }
 });
+
 
 // ==========================
 // ✅ Get All Plants
