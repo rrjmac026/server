@@ -7,9 +7,9 @@ const PDFDocument = require("pdfkit");
 const app = express();
 const port = process.env.PORT || 3000;
 
-// ✅ Check if Firestore credentials exist
+// ✅ Firestore Credentials Check
 if (!process.env.FIREBASE_CREDENTIALS) {
-  console.error("❌ FIREBASE_CREDENTIALS is missing. Set it in environment variables.");
+  console.error("❌ FIREBASE_CREDENTIALS missing! Set it in environment variables.");
   process.exit(1);
 }
 
@@ -44,23 +44,32 @@ app.post("/api/sensor-data", async (req, res) => {
     console.log("📩 Received Sensor Data:", req.body);
 
     const { moisture, temperature, humidity, plantId, moistureStatus } = req.body;
-    if (!moisture || !temperature || !humidity || !plantId || !moistureStatus) {
-      return res.status(400).json({ error: "❌ Invalid input data" });
+
+    // ✅ Fix: Explicitly check for undefined/null values (accepts 0 values)
+    if (
+      moisture === undefined || temperature === undefined ||
+      humidity === undefined || !plantId || !moistureStatus
+    ) {
+      return res.status(400).json({ error: "❌ Invalid input data - missing fields" });
     }
 
-    await db.collection("sensor_data").add({
+    // ✅ Fix: Store in Firestore & confirm success
+    const docRef = await db.collection("sensor_data").add({
       moisture, temperature, humidity, plantId, moistureStatus,
       timestamp: admin.firestore.Timestamp.now(),
     });
 
-    console.log("✅ Data stored in Firestore!");
-    res.json({ message: "Sensor data recorded successfully" });
+    if (!docRef.id) {
+      throw new Error("❌ Firestore write failed");
+    }
+
+    console.log(`✅ Data stored in Firestore! (Doc ID: ${docRef.id})`);
+    res.json({ message: "✅ Sensor data recorded successfully" });
   } catch (error) {
-    console.error("❌ Error storing data:", error);
-    res.status(500).json({ error: error.message });
+    console.error("❌ Error storing data:", error.message);
+    res.status(500).json({ error: "❌ Internal Server Error: " + error.message });
   }
 });
-
 
 // ==========================
 // ✅ Get All Plants
@@ -83,8 +92,8 @@ app.get("/api/plants", async (req, res) => {
     console.log(`✅ Found ${plants.length} plants`);
     res.json(plants);
   } catch (error) {
-    console.error("❌ Error fetching plants:", error);
-    res.status(500).json({ error: error.message });
+    console.error("❌ Error fetching plants:", error.message);
+    res.status(500).json({ error: "❌ Error fetching plants: " + error.message });
   }
 });
 
@@ -105,8 +114,8 @@ app.get("/api/plants/:plantId", async (req, res) => {
     console.log(`✅ Found plant ${plantId}`);
     res.json(plant);
   } catch (error) {
-    console.error("❌ Error fetching plant:", error);
-    res.status(500).json({ error: error.message });
+    console.error("❌ Error fetching plant:", error.message);
+    res.status(500).json({ error: "❌ Error fetching plant: " + error.message });
   }
 });
 
@@ -151,8 +160,8 @@ app.get("/api/reports/:plantId", async (req, res) => {
       historicalData: readings,
     });
   } catch (error) {
-    console.error("❌ Error generating report:", error);
-    res.status(500).json({ error: error.message });
+    console.error("❌ Error generating report:", error.message);
+    res.status(500).json({ error: "❌ Error generating report: " + error.message });
   }
 });
 
@@ -175,8 +184,8 @@ app.post("/api/setup-test-data", async (req, res) => {
     console.log("✅ Test data created");
     res.json({ message: "✅ Test data created successfully" });
   } catch (error) {
-    console.error("❌ Error setting up test data:", error);
-    res.status(500).json({ error: error.message });
+    console.error("❌ Error setting up test data:", error.message);
+    res.status(500).json({ error: "❌ Error setting up test data: " + error.message });
   }
 });
 
