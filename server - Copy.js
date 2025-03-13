@@ -120,46 +120,6 @@ app.get("/api/plants/:plantId", async (req, res) => {
 });
 
 // ==========================
-// ✅ Create New Plant
-// ==========================
-app.post("/api/plants", async (req, res) => {
-  try {
-    console.log("🌱 Creating new plant:", req.body);
-    
-    const { name, type, description } = req.body;
-    
-    // Validate required fields
-    if (!name || !type) {
-      return res.status(400).json({ error: "❌ Plant name and type are required" });
-    }
-
-    // Create plant document
-    const plantData = {
-      name,
-      type,
-      description: description || "",
-      createdAt: admin.firestore.Timestamp.now(),
-      updatedAt: admin.firestore.Timestamp.now()
-    };
-
-    // Add to Firestore
-    const docRef = await db.collection("plants").add(plantData);
-    
-    if (!docRef.id) {
-      throw new Error("❌ Firestore write failed");
-    }
-
-    // Return the created plant with its ID
-    const plant = { id: docRef.id, ...plantData };
-    console.log(`✅ Plant created successfully! (ID: ${docRef.id})`);
-    res.status(201).json(plant);
-  } catch (error) {
-    console.error("❌ Error creating plant:", error.message);
-    res.status(500).json({ error: "❌ Error creating plant: " + error.message });
-  }
-});
-
-// ==========================
 // ✅ Generate Reports
 // ==========================
 app.get("/api/reports/:plantId", async (req, res) => {
