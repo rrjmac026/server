@@ -7,13 +7,13 @@ const PDFDocument = require("pdfkit");
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Check if Firestore credentials exist
+// ✅ Check if Firestore credentials exist
 if (!process.env.FIREBASE_CREDENTIALS) {
   console.error("❌ FIREBASE_CREDENTIALS is missing. Set it in environment variables.");
   process.exit(1);
 }
 
-// Initialize Firebase Admin
+// ✅ Initialize Firebase Admin
 const serviceAccount = JSON.parse(process.env.FIREBASE_CREDENTIALS);
 admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 
@@ -24,6 +24,11 @@ const db = admin.firestore();
 // ==========================
 app.use(cors({ origin: "*" })); // Allow requests from any origin (ESP32)
 app.use(express.json()); // Enable JSON request parsing
+
+// ✅ Default Route (Fix for "Cannot GET /")
+app.get("/", (req, res) => {
+  res.send("🚀 Welcome to the Plant Monitoring API! Use the correct endpoints.");
+});
 
 // ✅ Log All Requests for Debugging
 app.use((req, res, next) => {
@@ -42,7 +47,7 @@ app.get("/api/health", (req, res) => {
 });
 
 // ==========================
-// ✅ Sensor Data Routes
+// ✅ Sensor Data Route (Fix for duplicate definition)
 // ==========================
 app.post("/api/sensor-data", async (req, res) => {
   try {
@@ -50,7 +55,7 @@ app.post("/api/sensor-data", async (req, res) => {
 
     const { moisture, temperature, plantId, moistureStatus } = req.body;
 
-    // Validate input data
+    // ✅ Validate input data
     if (
       typeof moisture !== "number" ||
       typeof temperature !== "number" ||
@@ -60,7 +65,7 @@ app.post("/api/sensor-data", async (req, res) => {
       return res.status(400).json({ error: "❌ Invalid input data" });
     }
 
-    // Save to Firestore
+    // ✅ Save to Firestore
     const timestamp = admin.firestore.Timestamp.now();
     await db.collection("sensor_data").add({
       moisture,
