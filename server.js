@@ -28,7 +28,7 @@ app.use(express.json()); // Enable JSON request parsing
 // ✅ Log All Requests for Debugging
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-  if (Object.keys(req.body).length) {
+  if (req.method === "POST" && Object.keys(req.body).length) {
     console.log("📩 Request Body:", JSON.stringify(req.body, null, 2));
   }
   next();
@@ -46,8 +46,11 @@ app.get("/api/health", (req, res) => {
 // ==========================
 app.post("/api/sensor-data", async (req, res) => {
   try {
+    console.log("📡 Received sensor data:", req.body);
+
     const { moisture, temperature, plantId, moistureStatus } = req.body;
 
+    // Validate input data
     if (
       typeof moisture !== "number" ||
       typeof temperature !== "number" ||
@@ -57,8 +60,8 @@ app.post("/api/sensor-data", async (req, res) => {
       return res.status(400).json({ error: "❌ Invalid input data" });
     }
 
+    // Save to Firestore
     const timestamp = admin.firestore.Timestamp.now();
-
     await db.collection("sensor_data").add({
       moisture,
       temperature,
