@@ -22,60 +22,51 @@ const db = admin.firestore();
 // ==========================
 // 🔧 Middleware Setup
 // ==========================
-app.use(cors({ origin: "*" })); // Allow requests from any origin (ESP32)
-app.use(express.json()); // Enable JSON request parsing
+app.use(cors({ origin: "*" })); // ✅ Allow requests from any origin (ESP32)
+app.use(express.json()); // ✅ Enable JSON request parsing
+app.use(express.urlencoded({ extended: true })); // ✅ Enable URL-encoded request parsing
 
 // ✅ Default Route (Fix for "Cannot GET /")
 app.get("/", (req, res) => {
   res.send("🚀 Welcome to the Plant Monitoring API! Use the correct endpoints.");
 });
 
-// ✅ Log All Requests for Debugging
-app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-  if (req.method === "POST" && Object.keys(req.body).length) {
-    console.log("📩 Request Body:", JSON.stringify(req.body, null, 2));
-  }
-  next();
-});
-
-// ==========================
-// ✅ Health Check Route
-// ==========================
+// ✅ Health Check
 app.get("/api/health", (req, res) => {
   res.json({ status: "✅ Server is running" });
 });
 
 // ==========================
-// ✅ Sensor Data Route (Fix for duplicate definition)
+// ✅ Receive Sensor Data from ESP32
 // ==========================
 app.post("/api/sensor-data", async (req, res) => {
   try {
-    console.log("📡 Received sensor data:", req.body);
+    console.log("📩 Received Sensor Data:", req.body);
 
-    const { moisture, temperature, plantId, moistureStatus } = req.body;
+    const { moisture, temperature, humidity, plantId, moistureStatus } = req.body;
 
     // ✅ Validate input data
     if (
       typeof moisture !== "number" ||
       typeof temperature !== "number" ||
+      typeof humidity !== "number" ||
       typeof plantId !== "string" ||
       typeof moistureStatus !== "string"
     ) {
       return res.status(400).json({ error: "❌ Invalid input data" });
     }
 
-    // ✅ Save to Firestore
-    const timestamp = admin.firestore.Timestamp.now();
+    // ✅ Store in Firestore
     await db.collection("sensor_data").add({
       moisture,
       temperature,
+      humidity,
       plantId,
       moistureStatus,
-      timestamp,
+      timestamp: admin.firestore.Timestamp.now(),
     });
 
-    console.log(`✅ Sensor data stored for plant: ${plantId}`);
+    console.log("✅ Sensor data successfully stored in Firestore!");
     res.json({ message: "✅ Sensor data recorded successfully" });
   } catch (error) {
     console.error("❌ Error storing sensor data:", error);
@@ -84,7 +75,7 @@ app.post("/api/sensor-data", async (req, res) => {
 });
 
 // ==========================
-// ✅ Plants Routes
+// ✅ Get All Plants
 // ==========================
 app.get("/api/plants", async (req, res) => {
   try {
@@ -109,6 +100,7 @@ app.get("/api/plants", async (req, res) => {
   }
 });
 
+// ✅ Get Single Plant Data
 app.get("/api/plants/:plantId", async (req, res) => {
   try {
     const { plantId } = req.params;
@@ -131,7 +123,7 @@ app.get("/api/plants/:plantId", async (req, res) => {
 });
 
 // ==========================
-// ✅ Report Routes
+// ✅ Generate Reports
 // ==========================
 app.get("/api/reports/:plantId", async (req, res) => {
   try {
