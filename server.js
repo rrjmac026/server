@@ -19,13 +19,16 @@ admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 
 const db = admin.firestore();
 
-// Function to ensure a default plant exists
-async function ensureDefaultPlant() {
+// Add this right after initializing Firebase
+let defaultPlantId = null;
+
+// Initialize function to ensure default plant exists
+async function initializeDefaultPlant() {
     try {
         const plantsSnapshot = await db.collection("plants").limit(1).get();
         
         if (plantsSnapshot.empty) {
-            console.log("Creating default plant...");
+            console.log("🌱 Creating initial default plant...");
             const defaultPlant = {
                 name: "Default Plant",
                 type: "Indoor Plant",
@@ -35,14 +38,14 @@ async function ensureDefaultPlant() {
             };
             
             const docRef = await db.collection("plants").add(defaultPlant);
-            console.log(`Created default plant with ID: ${docRef.id}`);
-            return docRef.id;
+            defaultPlantId = docRef.id;
+            console.log(`✅ Created default plant with ID: ${defaultPlantId}`);
         } else {
-            return plantsSnapshot.docs[0].id;
+            defaultPlantId = plantsSnapshot.docs[0].id;
+            console.log(`✅ Using existing plant with ID: ${defaultPlantId}`);
         }
     } catch (error) {
-        console.error("Error ensuring default plant:", error);
-        throw error;
+        console.error("❌ Error initializing default plant:", error);
     }
 }
 
@@ -69,34 +72,30 @@ app.get("/api/health", (req, res) => {
 app.post("/api/sensor-data", async (req, res) => {
     try {
         console.log("📩 Received Sensor Data:", req.body);
-        const { moisture, temperature, humidity, plantId, moistureStatus } = req.body;
+        let { moisture, temperature, humidity, plantId, moistureStatus } = req.body;
 
-        // Validate required fields
-        if (moisture === undefined || temperature === undefined || humidity === undefined) {
-            return res.status(400).json({ error: "❌ Missing sensor data fields" });
+        // Use default plant ID if none provided
+        if (!plantId && defaultPlantId) {
+            plantId = defaultPlantId;
+            console.log(`Using default plant ID: ${plantId}`);
         }
 
-        // Get or create default plant if plantId is missing
-        let actualPlantId = plantId;
-        if (!actualPlantId) {
-            actualPlantId = await ensureDefaultPlant();
-        }
-
-        // Calculate moisture status if not provided
-        let actualMoistureStatus = moistureStatus;
-        if (!actualMoistureStatus) {
-            if (moisture < 20) actualMoistureStatus = "DRY";
-            else if (moisture < 50) actualMoistureStatus = "MODERATE";
-            else if (moisture < 70) actualMoistureStatus = "NORMAL";
-            else actualMoistureStatus = "WET";
+        // Ensure we have a plant ID
+        if (!plantId) {
+            await initializeDefaultPlant(); // Try to create default plant
+            if (defaultPlantId) {
+                plantId = defaultPlantId;
+            } else {
+                return res.status(400).json({ error: "No plant ID available" });
+            }
         }
 
         const sensorData = {
-            moisture,
-            temperature,
-            humidity,
-            plantId: actualPlantId,
-            moistureStatus: actualMoistureStatus,
+            moisture: moisture || 0,
+            temperature: temperature || 0,
+            humidity: humidity || 0,
+            plantId,
+            moistureStatus: moistureStatus || getMoistureStatus(moisture),
             timestamp: admin.firestore.Timestamp.now(),
         };
 
@@ -104,7 +103,7 @@ app.post("/api/sensor-data", async (req, res) => {
         console.log(`✅ Data stored in Firestore! (Doc ID: ${docRef.id})`);
         res.json({ 
             message: "✅ Sensor data recorded successfully",
-            plantId: actualPlantId
+            plantId: plantId
         });
     } catch (error) {
         console.error("❌ Error storing data:", error.message);
@@ -202,6 +201,7 @@ app.post("/api/plants", async (req, res) => {
 // ==========================
 // 🚀 Start Server
 // ==========================
-app.listen(port, () => {
+app.listen(port, async () => {
+    await initializeDefaultPlant();
     console.log(`🚀 Server running on port ${port}`);
-});
+}); 
