@@ -23,10 +23,10 @@ const db = admin.firestore();
 // 🔧 Middleware Setup
 // ==========================
 app.use(cors({ origin: "*" })); // ✅ Allow requests from any origin (ESP32)
-app.use(express.json()); // ✅ Enable JSON request parsing
-app.use(express.urlencoded({ extended: true })); // ✅ Enable URL-encoded request parsing
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// ✅ Default Route (Fix for "Cannot GET /")
+// ✅ Default Route
 app.get("/", (req, res) => {
   res.send("🚀 Welcome to the Plant Monitoring API! Use the correct endpoints.");
 });
@@ -42,10 +42,8 @@ app.get("/api/health", (req, res) => {
 app.post("/api/sensor-data", async (req, res) => {
   try {
     console.log("📩 Received Sensor Data:", req.body);
-
     const { moisture, temperature, humidity, plantId, moistureStatus } = req.body;
 
-    // ✅ Fix: Explicitly check for undefined/null values (accepts 0 values)
     if (
       moisture === undefined || temperature === undefined ||
       humidity === undefined || !plantId || !moistureStatus
@@ -53,15 +51,10 @@ app.post("/api/sensor-data", async (req, res) => {
       return res.status(400).json({ error: "❌ Invalid input data - missing fields" });
     }
 
-    // ✅ Fix: Store in Firestore & confirm success
     const docRef = await db.collection("sensor_data").add({
       moisture, temperature, humidity, plantId, moistureStatus,
       timestamp: admin.firestore.Timestamp.now(),
     });
-
-    if (!docRef.id) {
-      throw new Error("❌ Firestore write failed");
-    }
 
     console.log(`✅ Data stored in Firestore! (Doc ID: ${docRef.id})`);
     res.json({ message: "✅ Sensor data recorded successfully" });
@@ -84,11 +77,7 @@ app.get("/api/plants", async (req, res) => {
       return res.json([]);
     }
 
-    const plants = plantsSnapshot.docs.map((doc) => ({
-      id: doc.id,
-      ...doc.data(),
-    }));
-
+    const plants = plantsSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
     console.log(`✅ Found ${plants.length} plants`);
     res.json(plants);
   } catch (error) {
@@ -110,9 +99,7 @@ app.get("/api/plants/:plantId", async (req, res) => {
       return res.status(404).json({ error: "Plant not found" });
     }
 
-    const plant = { id: plantDoc.id, ...plantDoc.data() };
-    console.log(`✅ Found plant ${plantId}`);
-    res.json(plant);
+    res.json({ id: plantDoc.id, ...plantDoc.data() });
   } catch (error) {
     console.error("❌ Error fetching plant:", error.message);
     res.status(500).json({ error: "❌ Error fetching plant: " + error.message });
@@ -125,34 +112,24 @@ app.get("/api/plants/:plantId", async (req, res) => {
 app.post("/api/plants", async (req, res) => {
   try {
     console.log("🌱 Creating new plant:", req.body);
-    
     const { name, type, description } = req.body;
-    
-    // Validate required fields
+
     if (!name || !type) {
       return res.status(400).json({ error: "❌ Plant name and type are required" });
     }
 
-    // Create plant document
     const plantData = {
       name,
       type,
       description: description || "",
       createdAt: admin.firestore.Timestamp.now(),
-      updatedAt: admin.firestore.Timestamp.now()
+      updatedAt: admin.firestore.Timestamp.now(),
     };
 
-    // Add to Firestore
     const docRef = await db.collection("plants").add(plantData);
-    
-    if (!docRef.id) {
-      throw new Error("❌ Firestore write failed");
-    }
 
-    // Return the created plant with its ID
-    const plant = { id: docRef.id, ...plantData };
     console.log(`✅ Plant created successfully! (ID: ${docRef.id})`);
-    res.status(201).json(plant);
+    res.status(201).json({ id: docRef.id, ...plantData });
   } catch (error) {
     console.error("❌ Error creating plant:", error.message);
     res.status(500).json({ error: "❌ Error creating plant: " + error.message });
@@ -173,16 +150,13 @@ app.get("/api/reports/:plantId", async (req, res) => {
 
     console.log(`📊 Generating report for plant ${plantId} from ${start} to ${end}`);
 
-    const startDate = new Date(start);
-    startDate.setHours(0, 0, 0, 0);
-    const endDate = new Date(end);
-    endDate.setHours(23, 59, 59, 999);
+    const startTimestamp = admin.firestore.Timestamp.fromDate(new Date(start));
+    const endTimestamp = admin.firestore.Timestamp.fromDate(new Date(end));
 
-    const snapshot = await db
-      .collection("sensor_data")
+    const snapshot = await db.collection("sensor_data")
       .where("plantId", "==", plantId)
-      .where("timestamp", ">=", admin.firestore.Timestamp.fromDate(startDate))
-      .where("timestamp", "<=", admin.firestore.Timestamp.fromDate(endDate))
+      .where("timestamp", ">=", startTimestamp)
+      .where("timestamp", "<=", endTimestamp)
       .orderBy("timestamp")
       .get();
 
@@ -190,14 +164,12 @@ app.get("/api/reports/:plantId", async (req, res) => {
       return res.status(404).json({ error: "No data found for the specified period" });
     }
 
-    const readings = snapshot.docs.map((doc) => doc.data());
-
     res.json({
       plantId,
-      startDate,
-      endDate,
-      totalReadings: readings.length,
-      historicalData: readings,
+      startDate: startTimestamp.toDate(),
+      endDate: endTimestamp.toDate(),
+      totalReadings: snapshot.size,
+      historicalData: snapshot.docs.map(doc => doc.data()),
     });
   } catch (error) {
     console.error("❌ Error generating report:", error.message);
@@ -205,6 +177,36 @@ app.get("/api/reports/:plantId", async (req, res) => {
   }
 });
 
+// ==========================
+// ✅ Get Latest Sensor Data for a Plant
+// ==========================
+app.get("/api/plants/:plantId/latest", async (req, res) => {
+  try {
+    const { plantId } = req.params;
+    console.log(`📡 Fetching latest data for plant ${plantId}`);
+
+    const plantDoc = db.collection("plants").doc(plantId);
+    
+    const [plantSnap, latestReadingSnap] = await Promise.all([
+      plantDoc.get(),
+      db.collection("sensor_data")
+        .where("plantId", "==", plantId)
+        .orderBy("timestamp", "desc")
+        .limit(1)
+        .get()
+    ]);
+
+    if (!plantSnap.exists) {
+      return res.status(404).json({ error: "Plant not found" });
+    }
+
+    const latestReading = latestReadingSnap.empty ? null : latestReadingSnap.docs[0].data();
+    res.json({ ...plantSnap.data(), lastReading: latestReading });
+  } catch (error) {
+    console.error("❌ Error fetching latest data:", error.message);
+    res.status(500).json({ error: "❌ Error: " + error.message });
+  }
+});
 
 // ==========================
 // 🚀 Start Server
