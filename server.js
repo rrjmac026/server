@@ -107,6 +107,53 @@ app.get("/api/plants/:plantId", async (req, res) => {
 });
 
 // ==========================
+// ✅ Get Latest Sensor Data
+// ==========================
+app.get("/api/plants/:plantId/latest-sensor-data", async (req, res) => {
+  try {
+    const { plantId } = req.params;
+    console.log(`📡 Fetching latest sensor data for plant ${plantId}`);
+
+    // First verify the plant exists
+    const plantDoc = await db.collection("plants").doc(plantId).get();
+    if (!plantDoc.exists) {
+      console.error(`⚠️ Plant ${plantId} not found`);
+      return res.status(404).json({ error: "Plant not found" });
+    }
+
+    // Get the most recent sensor reading
+    const latestReadingQuery = await db.collection("sensor_data")
+      .where("plantId", "==", plantId)
+      .orderBy("timestamp", "desc")
+      .limit(1)
+      .get();
+
+    if (latestReadingQuery.empty) {
+      console.log(`⚠️ No sensor data found for plant ${plantId}`);
+      return res.status(404).json({ error: "No sensor data found" });
+    }
+
+    const latestReading = latestReadingQuery.docs[0].data();
+    console.log(`✅ Found latest sensor data for plant ${plantId}`);
+    
+    // Format the response
+    const sensorData = {
+      moisture: latestReading.moisture,
+      temperature: latestReading.temperature,
+      humidity: latestReading.humidity,
+      plantId: plantId,
+      timestamp: latestReading.timestamp,
+      moistureStatus: latestReading.moistureStatus
+    };
+
+    res.json(sensorData);
+  } catch (error) {
+    console.error("❌ Error fetching latest sensor data:", error.message);
+    res.status(500).json({ error: "❌ Error fetching latest sensor data: " + error.message });
+  }
+});
+
+// ==========================
 // ✅ Create New Plant
 // ==========================
 app.post("/api/plants", async (req, res) => {
