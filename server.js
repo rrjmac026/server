@@ -176,22 +176,29 @@ app.post("/api/plants", async (req, res) => {
         console.log("🌱 Creating new plant:", req.body);
         const { name, type, description } = req.body;
 
-        if (!name || !type) {
-            return res.status(400).json({ error: "❌ Plant name and type are required" });
+        // Enhanced validation
+        if (!name) {
+            return res.status(400).json({ error: "❌ Plant name is required" });
         }
 
         const plantData = {
             name,
-            type,
+            type: type || "Default",  // Make type optional with default value
             description: description || "",
             createdAt: admin.firestore.Timestamp.now(),
             updatedAt: admin.firestore.Timestamp.now(),
+            lastWatered: null  // Add this to track last watering time
         };
 
         const docRef = await db.collection("plants").add(plantData);
-
         console.log(`✅ Plant created successfully! (ID: ${docRef.id})`);
-        res.status(201).json({ id: docRef.id, ...plantData });
+        
+        // Return the complete plant data including the ID
+        res.status(201).json({ 
+            id: docRef.id, 
+            ...plantData,
+            message: "Plant created successfully"
+        });
     } catch (error) {
         console.error("❌ Error creating plant:", error.message);
         res.status(500).json({ error: "❌ Error creating plant: " + error.message });
