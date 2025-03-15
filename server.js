@@ -184,47 +184,22 @@ app.get("/api/reports/:plantId", async (req, res) => {
       console.log(`📊 Generating report for plant ${plantId}`);
       console.log(`📅 Date range: ${start} to ${end}`);
 
-      // Validate parameters
       if (!plantId || !start || !end) {
-          console.log("❌ Missing required parameters");
-          return res.status(400).json({ 
-              error: "Plant ID, start date, and end date are required" 
-          });
+          return res.status(400).json({ error: "Plant ID, start date, and end date are required" });
       }
 
-      // First check if plant exists using collection query
-      const plantsSnapshot = await db.collection("plants")
-          .where(admin.firestore.FieldPath.documentId(), "==", plantId)
-          .get();
-
-      if (plantsSnapshot.empty) {
-          console.log(`❌ Plant not found with ID: ${plantId}`);
-          return res.status(404).json({ 
-              error: "Plant not found",
-              details: `No plant exists with ID: ${plantId}`
-          });
-      }
-
-      const plant = plantsSnapshot.docs[0].data();
-      console.log(`✅ Found plant: ${plant.name}`);
-
-      // Get sensor data
       const startDate = new Date(start);
       const endDate = new Date(end);
-      
-      console.log("📡 Fetching sensor data...");
+
       const sensorDataQuery = await db.collection("sensor_data")
           .where("plantId", "==", plantId)
           .where("timestamp", ">=", admin.firestore.Timestamp.fromDate(startDate))
           .where("timestamp", "<=", admin.firestore.Timestamp.fromDate(endDate))
           .get();
 
-      console.log(`📊 Found ${sensorDataQuery.size} sensor readings`);
-
-      // Calculate averages
-      let totalTemp = 0, totalMoisture = 0, totalHumidity = 0;
       const readings = sensorDataQuery.docs.map(doc => doc.data());
       const count = readings.length;
+      let totalTemp = 0, totalMoisture = 0, totalHumidity = 0;
 
       readings.forEach(reading => {
           totalTemp += reading.temperature || 0;
@@ -234,7 +209,7 @@ app.get("/api/reports/:plantId", async (req, res) => {
 
       const reportData = {
           plantId,
-          plantName: plant.name,
+          plantName: `Plant ${plantId}`,
           startDate: start,
           endDate: end,
           averageTemperature: count ? (totalTemp / count).toFixed(2) : 0,
@@ -243,21 +218,14 @@ app.get("/api/reports/:plantId", async (req, res) => {
           readingsCount: count
       };
 
-      console.log("✅ Report data generated:", reportData);
-      res.json(reportData);
+      await generatePDFReport(reportData, start, end, res);
 
   } catch (error) {
-      console.error("❌ Error generating report:", error);
-      res.status(500).json({ 
-          error: "Error generating report",
-          details: error.message,
-          plantId: req.params.plantId
-      });
+      res.status(500).json({ error: "Error generating report", details: error.message });
   }
 });
 
 // ✅ Start Server
-app.listen(port, async () => {
-  await initializeDefaultPlant();
+app.listen(port, () => {
   console.log(`🚀 Server running on port ${port}`);
 });
