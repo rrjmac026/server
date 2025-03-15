@@ -209,15 +209,16 @@ app.get("/api/reports/:plantId", async (req, res) => {
       });
 
       const reportData = {
-          plantId,
-          plantName: `Plant ${plantId}`,
-          startDate: start,
-          endDate: end,
-          averageTemperature: count ? (totalTemp / count).toFixed(2) : 0,
-          averageMoisture: count ? (totalMoisture / count).toFixed(2) : 0,
-          averageHumidity: count ? (totalHumidity / count).toFixed(2) : 0,
-          readingsCount: count
-      };
+        plantId,
+        plantName: `Plant ${plantId}`,
+        startDate: start,
+        endDate: end,
+        averageTemperature: count ? Number((totalTemp / count).toFixed(2)) : 0,
+        averageMoisture: count ? Number((totalMoisture / count).toFixed(2)) : 0,
+        averageHumidity: count ? Number((totalHumidity / count).toFixed(2)) : 0,
+        readingsCount: count
+    };
+    
 
       await generatePDFReport(reportData, start, end, res);
 
