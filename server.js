@@ -195,6 +195,7 @@ app.get("/api/reports/:plantId", async (req, res) => {
           .where("plantId", "==", plantId)
           .where("timestamp", ">=", admin.firestore.Timestamp.fromDate(startDate))
           .where("timestamp", "<=", admin.firestore.Timestamp.fromDate(endDate))
+          .orderBy("timestamp", "desc") // ✅ Ensure query matches Firestore index
           .get();
 
       const readings = sensorDataQuery.docs.map(doc => doc.data());
