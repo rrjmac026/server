@@ -272,6 +272,62 @@ app.get("/api/reports/:plantId", async (req, res) => {
   }
 });
 
+// ==========================
+// ✅ Plant CRUD Operations
+// ==========================
+app.get("/plants/:plantId", async (req, res) => {
+  try {
+    const { plantId } = req.params;
+    console.log(`🔍 Fetching plant with ID: ${plantId}`);
+
+    const plantDoc = await db.collection("plants").doc(plantId).get();
+    if (!plantDoc.exists) {
+      console.log(`❌ Plant not found with ID: ${plantId}`);
+      return res.status(404).json({ error: "Plant not found" });
+    }
+
+    const plantData = plantDoc.data();
+    console.log(`✅ Found plant: ${plantData.name}`);
+    res.json(plantData);
+  } catch (error) {
+    console.error("❌ Error fetching plant:", error);
+    res.status(500).json({ error: "Internal Server Error", details: error.message });
+  }
+});
+
+app.get("/plants", async (req, res) => {
+  try {
+    console.log("📋 Fetching all plants");
+    const plantsSnapshot = await db.collection("plants").get();
+    const plants = plantsSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+    console.log(`✅ Found ${plants.length} plants`);
+    res.json(plants);
+  } catch (error) {
+    console.error("❌ Error fetching plants:", error);
+    res.status(500).json({ error: "Internal Server Error", details: error.message });
+  }
+});
+
+app.put("/plants/:plantId", async (req, res) => {
+  try {
+    const { plantId } = req.params;
+    const updateData = req.body;
+    updateData.updatedAt = admin.firestore.Timestamp.now();
+
+    console.log(`📝 Updating plant ${plantId}:`, updateData);
+    await db.collection("plants").doc(plantId).update(updateData);
+    
+    console.log("✅ Plant updated successfully");
+    res.json({ message: "Plant updated successfully" });
+  } catch (error) {
+    console.error("❌ Error updating plant:", error);
+    res.status(500).json({ error: "Internal Server Error", details: error.message });
+  }
+});
+
 // ✅ Start Server
 app.listen(port, () => {
   console.log(`🚀 Server running on port ${port}`);
