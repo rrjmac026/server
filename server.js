@@ -152,25 +152,43 @@ async function generatePDFReport(data, startDate, endDate, res) {
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `attachment; filename=plant-report-${data.plantId}.pdf`);
 
-  // Add title
-  doc.fontSize(20).text("Plant Monitoring Report", { align: "center" }).moveDown();
-
+  // Add title and logo
+  doc.fontSize(24).text("Plant Monitoring Report", { align: "center" }).moveDown();
+  
   // Add date range
-  doc.fontSize(12).text(`Report Period: ${startDate} to ${endDate}`, { align: "center" }).moveDown();
+  doc.fontSize(14).text(`Report Period: ${startDate} to ${endDate}`, { align: "center" }).moveDown();
 
   // Add plant info
-  doc.fontSize(16).text("Plant Information").moveDown();
-  doc.fontSize(12).text(`Plant ID: ${data.plantId}`).text(`Plant Name: ${data.plantName}`).moveDown();
+  doc.fontSize(18).text("Plant Information", { underline: true }).moveDown();
+  doc.fontSize(12)
+    .text(`Plant ID: ${data.plantId}`)
+    .text(`Plant Name: ${data.plantName}`)
+    .text(`Total Readings: ${data.readingsCount}`)
+    .moveDown();
 
   // Add sensor data averages
-  doc.fontSize(16).text("Sensor Data Averages").moveDown();
+  doc.fontSize(18).text("Sensor Data Analysis", { underline: true }).moveDown();
   doc.fontSize(12)
     .text(`Average Temperature: ${data.averageTemperature.toFixed(2)}°C`)
-    .text(`Average Moisture: ${data.averageMoisture.toFixed(2)}%`)
+    .text(`Average Moisture: ${data.averageMoisture.toFixed(2)}%`) 
     .text(`Average Humidity: ${data.averageHumidity.toFixed(2)}%`)
     .moveDown();
 
-  // Pipe the PDF to the response
+  // Add watering/fertilizing events
+  doc.fontSize(18).text("Maintenance Events", { underline: true }).moveDown();
+  doc.fontSize(12)
+    .text(`Watering Events: ${data.wateringCount}`)
+    .text(`Fertilizing Events: ${data.fertilizingCount}`)
+    .moveDown();
+
+  // Add moisture status distribution
+  doc.fontSize(18).text("Moisture Status Distribution", { underline: true }).moveDown();
+  doc.fontSize(12)
+    .text(`Dry Readings: ${data.moistureStats.dry}`)
+    .text(`Moist Readings: ${data.moistureStats.moist}`) 
+    .text(`Wet Readings: ${data.moistureStats.wet}`)
+    .moveDown();
+
   doc.pipe(res);
   doc.end();
 }
@@ -178,52 +196,79 @@ async function generatePDFReport(data, startDate, endDate, res) {
 // ✅ PDF Report Endpoint
 app.get("/api/reports/:plantId", async (req, res) => {
   try {
-      const { plantId } = req.params;
-      const { start, end } = req.query;
+    const { plantId } = req.params;
+    const { start, end } = req.query;
 
-      console.log(`📊 Generating report for plant ${plantId}`);
-      console.log(`📅 Date range: ${start} to ${end}`);
+    console.log(`📊 Generating report for plant ${plantId}`);
+    console.log(`📅 Date range: ${start} to ${end}`);
 
-      if (!plantId || !start || !end) {
-          return res.status(400).json({ error: "Plant ID, start date, and end date are required" });
+    if (!plantId || !start || !end) {
+      return res.status(400).json({ error: "Plant ID, start date, and end date are required" });
+    }
+
+    const startDate = new Date(start);
+    const endDate = new Date(end);
+
+    // Get plant info first
+    const plantDoc = await db.collection("plants").doc(plantId).get();
+    if (!plantDoc.exists) {
+      return res.status(404).json({ error: "Plant not found" });
+    }
+    const plantData = plantDoc.data();
+
+    // Get sensor readings
+    const sensorDataQuery = await db.collection("sensor_data")
+      .where("plantId", "==", plantId)
+      .where("timestamp", ">=", admin.firestore.Timestamp.fromDate(startDate))
+      .where("timestamp", "<=", admin.firestore.Timestamp.fromDate(endDate))
+      .orderBy("timestamp", "desc")
+      .get();
+
+    const readings = sensorDataQuery.docs.map(doc => doc.data());
+    const count = readings.length;
+
+    // Calculate averages and stats
+    let totalTemp = 0, totalMoisture = 0, totalHumidity = 0;
+    let moistureStats = { dry: 0, moist: 0, wet: 0 };
+    let wateringCount = 0;
+    let fertilizingCount = 0;
+
+    readings.forEach(reading => {
+      totalTemp += reading.temperature || 0;
+      totalMoisture += reading.moisture || 0;
+      totalHumidity += reading.humidity || 0;
+
+      // Count moisture status distribution
+      if (reading.moistureStatus === "DRY") moistureStats.dry++;
+      else if (reading.moistureStatus === "MOIST") moistureStats.moist++;
+      else if (reading.moistureStatus === "WET") moistureStats.wet++;
+
+      // Count watering/fertilizing events based on moisture changes
+      if (reading.moistureStatus === "WET") {
+        if (reading.moisture >= 70) wateringCount++;
+        if (reading.moisture >= 80) fertilizingCount++;
       }
+    });
 
-      const startDate = new Date(start);
-      const endDate = new Date(end);
-
-      const sensorDataQuery = await db.collection("sensor_data")
-          .where("plantId", "==", plantId)
-          .where("timestamp", ">=", admin.firestore.Timestamp.fromDate(startDate))
-          .where("timestamp", "<=", admin.firestore.Timestamp.fromDate(endDate))
-          .orderBy("timestamp", "desc") // ✅ Ensure query matches Firestore index
-          .get();
-
-      const readings = sensorDataQuery.docs.map(doc => doc.data());
-      const count = readings.length;
-      let totalTemp = 0, totalMoisture = 0, totalHumidity = 0;
-
-      readings.forEach(reading => {
-          totalTemp += reading.temperature || 0;
-          totalMoisture += reading.moisture || 0;
-          totalHumidity += reading.humidity || 0;
-      });
-
-      const reportData = {
-        plantId,
-        plantName: `Plant ${plantId}`,
-        startDate: start,
-        endDate: end,
-        averageTemperature: count ? Number((totalTemp / count).toFixed(2)) : 0,
-        averageMoisture: count ? Number((totalMoisture / count).toFixed(2)) : 0,
-        averageHumidity: count ? Number((totalHumidity / count).toFixed(2)) : 0,
-        readingsCount: count
+    const reportData = {
+      plantId,
+      plantName: plantData.name || "Unknown Plant",
+      startDate: start,
+      endDate: end,
+      averageTemperature: count ? Number((totalTemp / count).toFixed(2)) : 0,
+      averageMoisture: count ? Number((totalMoisture / count).toFixed(2)) : 0,
+      averageHumidity: count ? Number((totalHumidity / count).toFixed(2)) : 0,
+      readingsCount: count,
+      wateringCount,
+      fertilizingCount,
+      moistureStats
     };
-    
 
-      await generatePDFReport(reportData, start, end, res);
+    await generatePDFReport(reportData, start, end, res);
 
   } catch (error) {
-      res.status(500).json({ error: "Error generating report", details: error.message });
+    console.error("Error generating report:", error);
+    res.status(500).json({ error: "Error generating report", details: error.message });
   }
 });
 
