@@ -65,6 +65,13 @@ async function initializeDefaultPlant() {
   }
 }
 
+// Function to determine moisture status
+function getMoistureStatus(moisture) {
+  if (moisture >= 70) return "WET";
+  if (moisture >= 40) return "MOIST";
+  return "DRY";
+}
+
 // ==========================
 // ✅ Receive Sensor Data
 // ==========================
@@ -109,13 +116,6 @@ app.post("/api/sensor-data", async (req, res) => {
   }
 });
 
-// Function to determine moisture status
-function getMoistureStatus(moisture) {
-  if (moisture >= 70) return "WET";
-  if (moisture >= 40) return "MOIST";
-  return "DRY";
-}
-
 // ==========================
 // ✅ Get Latest Sensor Data
 // ==========================
@@ -131,14 +131,28 @@ app.get("/api/plants/:plantId/latest-sensor-data", async (req, res) => {
       .get();
 
     if (latestReadingQuery.empty) {
-      return res.json({ moisture: 0, temperature: 0, humidity: 0, moistureStatus: "NO_DATA" });
+      return res.status(404).json({ 
+        error: 'No sensor data found',
+        moisture: 0, 
+        temperature: 0, 
+        humidity: 0, 
+        moistureStatus: "NO_DATA" 
+      });
     }
 
     const latestReading = latestReadingQuery.docs[0].data();
-    res.json(latestReading);
+    // Format response to match Flutter app expectations
+    const response = {
+      moisture: latestReading.moisture || 0,
+      temperature: latestReading.temperature || 0,
+      humidity: latestReading.humidity || 0,
+      moistureStatus: latestReading.moistureStatus || "NO_DATA",
+      timestamp: latestReading.timestamp
+    };
+    res.json(response);
   } catch (error) {
     console.error("❌ Error fetching latest sensor data:", error.message);
-    res.status(500).json({ error: "❌ Internal Server Error" });
+    res.status(500).json({ error: "Failed to load sensor data" });
   }
 });
 
@@ -188,6 +202,20 @@ async function generatePDFReport(data, startDate, endDate, res) {
     .text(`Moist Readings: ${data.moistureStats.moist}`) 
     .text(`Wet Readings: ${data.moistureStats.wet}`)
     .moveDown();
+
+  // Add data table similar to Flutter app's report
+  doc.fontSize(18).text("Sensor Readings", { underline: true }).moveDown();
+  doc.fontSize(12);
+  const readings = data.readings;
+  doc.table({
+    headers: ['Date', 'Temperature', 'Moisture', 'Humidity'],
+    rows: readings.map(reading => [
+      reading.timestamp.toDate().toLocaleDateString(),
+      `${reading.temperature}°C`,
+      `${reading.moisture}%`,
+      `${reading.humidity}%`
+    ])
+  });
 
   doc.pipe(res);
   doc.end();
@@ -261,7 +289,8 @@ app.get("/api/reports/:plantId", async (req, res) => {
       readingsCount: count,
       wateringCount,
       fertilizingCount,
-      moistureStats
+      moistureStats,
+      readings
     };
 
     await generatePDFReport(reportData, start, end, res);
