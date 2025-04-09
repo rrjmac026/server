@@ -141,7 +141,6 @@ app.get("/api/plants/:plantId/latest-sensor-data", async (req, res) => {
     }
 
     const latestReading = latestReadingQuery.docs[0].data();
-    // Format response to match Flutter app expectations
     const response = {
       moisture: latestReading.moisture || 0,
       temperature: latestReading.temperature || 0,
@@ -203,7 +202,7 @@ async function generatePDFReport(data, startDate, endDate, res) {
     .text(`Wet Readings: ${data.moistureStats.wet}`)
     .moveDown();
 
-  // Add data table similar to Flutter app's report
+  // Add data table
   doc.fontSize(18).text("Sensor Readings", { underline: true }).moveDown();
   doc.fontSize(12);
   const readings = data.readings;
@@ -234,130 +233,59 @@ app.get("/api/reports/:plantId", async (req, res) => {
       return res.status(400).json({ error: "Plant ID, start date, and end date are required" });
     }
 
-    const startDate = new Date(start);
-    const endDate = new Date(end);
-
-    // Get plant info first
-    const plantDoc = await db.collection("plants").doc(plantId).get();
-    if (!plantDoc.exists) {
-      return res.status(404).json({ error: "Plant not found" });
-    }
-    const plantData = plantDoc.data();
-
-    // Get sensor readings
-    const sensorDataQuery = await db.collection("sensor_data")
+    // Retrieve sensor data for date range
+    const snapshot = await db.collection("sensor_data")
       .where("plantId", "==", plantId)
-      .where("timestamp", ">=", admin.firestore.Timestamp.fromDate(startDate))
-      .where("timestamp", "<=", admin.firestore.Timestamp.fromDate(endDate))
-      .orderBy("timestamp", "desc")
+      .where("timestamp", ">=", new Date(start))
+      .where("timestamp", "<=", new Date(end))
       .get();
 
-    const readings = sensorDataQuery.docs.map(doc => doc.data());
-    const count = readings.length;
+    if (snapshot.empty) {
+      return res.status(404).json({ error: "No data found for the selected range" });
+    }
 
-    // Calculate averages and stats
-    let totalTemp = 0, totalMoisture = 0, totalHumidity = 0;
+    let readings = [];
+    let totalTemperature = 0, totalMoisture = 0, totalHumidity = 0;
     let moistureStats = { dry: 0, moist: 0, wet: 0 };
-    let wateringCount = 0;
-    let fertilizingCount = 0;
+    let wateringCount = 0, fertilizingCount = 0;
 
-    readings.forEach(reading => {
-      totalTemp += reading.temperature || 0;
-      totalMoisture += reading.moisture || 0;
-      totalHumidity += reading.humidity || 0;
-
-      // Count moisture status distribution
-      if (reading.moistureStatus === "DRY") moistureStats.dry++;
-      else if (reading.moistureStatus === "MOIST") moistureStats.moist++;
-      else if (reading.moistureStatus === "WET") moistureStats.wet++;
-
-      // Count watering/fertilizing events based on moisture changes
-      if (reading.moistureStatus === "WET") {
-        if (reading.moisture >= 70) wateringCount++;
-        if (reading.moisture >= 80) fertilizingCount++;
-      }
+    snapshot.docs.forEach(doc => {
+      const data = doc.data();
+      readings.push(data);
+      totalTemperature += data.temperature;
+      totalMoisture += data.moisture;
+      totalHumidity += data.humidity;
+      if (data.moistureStatus === 'DRY') moistureStats.dry++;
+      if (data.moistureStatus === 'MOIST') moistureStats.moist++;
+      if (data.moistureStatus === 'WET') moistureStats.wet++;
+      
+      // Placeholder for counting events like watering/fertilizing (you may track these separately)
+      if (data.moistureStatus === "DRY") wateringCount++;
+      if (data.moistureStatus === "MOIST") fertilizingCount++;
     });
 
     const reportData = {
       plantId,
-      plantName: plantData.name || "Unknown Plant",
-      startDate: start,
-      endDate: end,
-      averageTemperature: count ? Number((totalTemp / count).toFixed(2)) : 0,
-      averageMoisture: count ? Number((totalMoisture / count).toFixed(2)) : 0,
-      averageHumidity: count ? Number((totalHumidity / count).toFixed(2)) : 0,
-      readingsCount: count,
+      plantName: "Your Plant Name",  // Replace with the plant name retrieved from the database
+      readingsCount: readings.length,
+      averageTemperature: totalTemperature / readings.length,
+      averageMoisture: totalMoisture / readings.length,
+      averageHumidity: totalHumidity / readings.length,
+      moistureStats,
       wateringCount,
       fertilizingCount,
-      moistureStats,
-      readings
+      readings,
     };
 
-    await generatePDFReport(reportData, start, end, res);
+    generatePDFReport(reportData, start, end, res);
 
   } catch (error) {
-    console.error("Error generating report:", error);
-    res.status(500).json({ error: "Error generating report", details: error.message });
+    console.error("❌ Error generating report:", error);
+    res.status(500).json({ error: "Failed to generate report" });
   }
 });
 
-// ==========================
-// ✅ Plant CRUD Operations
-// ==========================
-app.get("/plants/:plantId", async (req, res) => {
-  try {
-    const { plantId } = req.params;
-    console.log(`🔍 Fetching plant with ID: ${plantId}`);
-
-    const plantDoc = await db.collection("plants").doc(plantId).get();
-    if (!plantDoc.exists) {
-      console.log(`❌ Plant not found with ID: ${plantId}`);
-      return res.status(404).json({ error: "Plant not found" });
-    }
-
-    const plantData = plantDoc.data();
-    console.log(`✅ Found plant: ${plantData.name}`);
-    res.json(plantData);
-  } catch (error) {
-    console.error("❌ Error fetching plant:", error);
-    res.status(500).json({ error: "Internal Server Error", details: error.message });
-  }
-});
-
-app.get("/plants", async (req, res) => {
-  try {
-    console.log("📋 Fetching all plants");
-    const plantsSnapshot = await db.collection("plants").get();
-    const plants = plantsSnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    }));
-    console.log(`✅ Found ${plants.length} plants`);
-    res.json(plants);
-  } catch (error) {
-    console.error("❌ Error fetching plants:", error);
-    res.status(500).json({ error: "Internal Server Error", details: error.message });
-  }
-});
-
-app.put("/plants/:plantId", async (req, res) => {
-  try {
-    const { plantId } = req.params;
-    const updateData = req.body;
-    updateData.updatedAt = admin.firestore.Timestamp.now();
-
-    console.log(`📝 Updating plant ${plantId}:`, updateData);
-    await db.collection("plants").doc(plantId).update(updateData);
-    
-    console.log("✅ Plant updated successfully");
-    res.json({ message: "Plant updated successfully" });
-  } catch (error) {
-    console.error("❌ Error updating plant:", error);
-    res.status(500).json({ error: "Internal Server Error", details: error.message });
-  }
-});
-
-// ✅ Start Server
+// ✅ Start the Server
 app.listen(port, () => {
-  console.log(`🚀 Server running on port ${port}`);
+  console.log(`✅ Server started at http://localhost:${port}`);
 });
