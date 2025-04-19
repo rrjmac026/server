@@ -3,6 +3,7 @@ const cors = require("cors");
 const admin = require("firebase-admin");
 require("dotenv").config();
 const PDFDocument = require("pdfkit");
+const moment = require('moment-timezone');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -38,7 +39,7 @@ app.get("/api/health", (req, res) => {
 async function saveSensorData(data) {
   const docRef = await db.collection("sensor_data").add({
     ...data,
-    timestamp: admin.firestore.Timestamp.now()
+    timestamp: moment().tz('Asia/Manila').toDate()
   });
   return docRef;
 }
@@ -143,7 +144,7 @@ app.get("/api/plants/:plantId/latest-sensor-data", async (req, res) => {
       temperature: latestReading.temperature || 0,
       humidity: latestReading.humidity || 0,
       moistureStatus: latestReading.moistureStatus || "NO_DATA",
-      timestamp: latestReading.timestamp.toDate().toISOString()
+      timestamp: moment(latestReading.timestamp).tz('Asia/Manila').format()
     };
     res.json(response);
   } catch (error) {
@@ -192,7 +193,7 @@ app.get("/api/reports", async (req, res) => {
     doc.moveDown();
     doc.fontSize(12)
       .text(`Plant ID: ${plantId}`)
-      .text(`Report Period: ${new Date(start).toLocaleDateString()} to ${new Date(end).toLocaleDateString()}`)
+      .text(`Report Period: ${moment(start).tz('Asia/Manila').format('YYYY-MM-DD LT')} to ${moment(end).tz('Asia/Manila').format('YYYY-MM-DD LT')}`)
       .text(`Total Readings: ${count}`);
     doc.moveDown();
 
@@ -210,7 +211,7 @@ app.get("/api/reports", async (req, res) => {
     doc.fontSize(14).text('Recent Readings:', { underline: true });
     readings.slice(0, 10).forEach((reading, index) => {
       doc.fontSize(12)
-        .text(`Time: ${reading.timestamp.toLocaleString()}`)
+        .text(`Time: ${moment(reading.timestamp).tz('Asia/Manila').format('YYYY-MM-DD LT')}`)
         .text(`Temperature: ${reading.temperature}°C`)
         .text(`Humidity: ${reading.humidity}%`)
         .text(`Moisture: ${reading.moisture}%`)
