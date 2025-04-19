@@ -1,44 +1,23 @@
 const express = require("express");
 const cors = require("cors");
-const fs = require('fs').promises;
-const path = require('path');
-const PDFDocument = require("pdfkit");
+const admin = require("firebase-admin");
 require("dotenv").config();
+const PDFDocument = require("pdfkit");
 
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Data storage paths
-const DATA_DIR = path.join(__dirname, 'data');
-const PLANTS_FILE = path.join(DATA_DIR, 'plants.json');
-const SENSOR_DATA_FILE = path.join(DATA_DIR, 'sensor_data.json');
-
-// Initialize data storage
-async function initializeStorage() {
-  try {
-    await fs.mkdir(DATA_DIR, { recursive: true });
-    
-    // Initialize plants file if it doesn't exist
-    try {
-      await fs.access(PLANTS_FILE);
-    } catch {
-      await fs.writeFile(PLANTS_FILE, JSON.stringify({ plants: [] }));
-    }
-    
-    // Initialize sensor data file if it doesn't exist
-    try {
-      await fs.access(SENSOR_DATA_FILE);
-    } catch {
-      await fs.writeFile(SENSOR_DATA_FILE, JSON.stringify({ readings: [] }));
-    }
-  } catch (error) {
-    console.error('Storage initialization error:', error);
-    process.exit(1);
-  }
+// ✅ Firestore Credentials Check
+if (!process.env.FIREBASE_CREDENTIALS) {
+  console.error("❌ FIREBASE_CREDENTIALS missing! Set it in environment variables.");
+  process.exit(1);
 }
 
-// Initialize storage on startup
-initializeStorage();
+// ✅ Initialize Firebase Admin
+const serviceAccount = JSON.parse(process.env.FIREBASE_CREDENTIALS);
+admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+
+const db = admin.firestore();
 
 // ✅ Middleware Setup
 app.use(cors({ origin: "*" }));
@@ -57,22 +36,21 @@ app.get("/api/health", (req, res) => {
 
 // Helper functions
 async function saveSensorData(data) {
-  const fileData = await fs.readFile(SENSOR_DATA_FILE, 'utf8');
-  const sensorData = JSON.parse(fileData);
-  sensorData.readings.push({
+  const docRef = await db.collection("sensor_data").add({
     ...data,
-    timestamp: new Date().toISOString()
+    timestamp: admin.firestore.Timestamp.now()
   });
-  await fs.writeFile(SENSOR_DATA_FILE, JSON.stringify(sensorData, null, 2));
-  return data;
+  return docRef;
 }
 
 async function getLatestReading(plantId) {
-  const fileData = await fs.readFile(SENSOR_DATA_FILE, 'utf8');
-  const sensorData = JSON.parse(fileData);
-  return sensorData.readings
-    .filter(r => r.plantId === plantId)
-    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))[0];
+  const snapshot = await db.collection("sensor_data")
+    .where("plantId", "==", plantId)
+    .orderBy("timestamp", "desc")
+    .limit(1)
+    .get();
+  
+  return snapshot.empty ? null : snapshot.docs[0].data();
 }
 
 // Function to determine moisture status
@@ -80,6 +58,41 @@ function getMoistureStatus(moisture) {
   if (moisture >= 70) return "WET";
   if (moisture >= 40) return "MOIST";
   return "DRY";
+}
+
+// Add new helper functions
+async function getReadingsInRange(plantId, startDate, endDate) {
+  const snapshot = await db.collection("sensor_data")
+    .where("plantId", "==", plantId)
+    .where("timestamp", ">=", admin.firestore.Timestamp.fromDate(new Date(startDate)))
+    .where("timestamp", "<=", admin.firestore.Timestamp.fromDate(new Date(endDate)))
+    .orderBy("timestamp", "desc")
+    .get();
+
+  return snapshot.docs.map(doc => ({
+    ...doc.data(),
+    id: doc.id,
+    timestamp: doc.data().timestamp.toDate()
+  }));
+}
+
+function calculateStats(readings) {
+  return readings.reduce((stats, reading) => {
+    stats.totalTemperature += reading.temperature || 0;
+    stats.totalHumidity += reading.humidity || 0;
+    stats.totalMoisture += reading.moisture || 0;
+    stats.moistureStatus[reading.moistureStatus.toLowerCase()]++;
+    stats.waterStateCount += reading.waterState ? 1 : 0;
+    stats.fertilizerStateCount += reading.fertilizerState ? 1 : 0;
+    return stats;
+  }, {
+    totalTemperature: 0,
+    totalHumidity: 0,
+    totalMoisture: 0,
+    moistureStatus: { dry: 0, moist: 0, wet: 0 },
+    waterStateCount: 0,
+    fertilizerStateCount: 0
+  });
 }
 
 // ==========================
@@ -130,7 +143,7 @@ app.get("/api/plants/:plantId/latest-sensor-data", async (req, res) => {
       temperature: latestReading.temperature || 0,
       humidity: latestReading.humidity || 0,
       moistureStatus: latestReading.moistureStatus || "NO_DATA",
-      timestamp: latestReading.timestamp
+      timestamp: latestReading.timestamp.toDate().toISOString()
     };
     res.json(response);
   } catch (error) {
@@ -144,72 +157,117 @@ app.get("/api/plants/:plantId/latest-sensor-data", async (req, res) => {
 // ==========================
 app.get("/api/reports", async (req, res) => {
   try {
-    const { plantId, start, end } = req.query;
+    const { plantId, start, end, format = 'pdf' } = req.query;
     
     if (!plantId || !start || !end) {
       return res.status(400).json({
         error: "Missing parameters",
-        required: {
-          plantId: "string - The ID of the plant",
-          start: "date - Start date (YYYY-MM-DD)",
-          end: "date - End date (YYYY-MM-DD)"
-        },
-        example: "/api/reports?plantId=123&start=2024-01-01&end=2024-01-31"
+        example: "/api/reports?plantId=123&start=2024-01-01&end=2024-01-31&format=pdf|json"
       });
     }
 
-    const fileData = await fs.readFile(SENSOR_DATA_FILE, 'utf8');
-    const sensorData = JSON.parse(fileData);
-    const readings = sensorData.readings.filter(r => 
-      r.plantId === plantId &&
-      new Date(r.timestamp) >= new Date(start) &&
-      new Date(r.timestamp) <= new Date(end)
-    );
-
+    const readings = await getReadingsInRange(plantId, start, end);
+    
     if (readings.length === 0) {
-      return res.status(404).json({ 
-        error: "No data found",
-        plantId,
-        start,
-        end
-      });
+      return res.status(404).json({ error: "No data found" });
     }
 
-    // Create basic PDF
+    const stats = calculateStats(readings);
+    const count = readings.length;
+
+    // Return JSON if requested
+    if (format === 'json') {
+      return res.json({ readings, stats });
+    }
+
+    // Generate PDF report
     const doc = new PDFDocument();
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=plant-report-${plantId}.pdf`);
     
     doc.pipe(res);
 
-    // Add basic content
+    // Enhanced PDF content
     doc.fontSize(24).text('Plant Monitoring Report', { align: 'center' });
     doc.moveDown();
     doc.fontSize(12)
       .text(`Plant ID: ${plantId}`)
-      .text(`Report Period: ${new Date(start).toLocaleDateString()} to ${new Date(end).toLocaleDateString()}`);
+      .text(`Report Period: ${new Date(start).toLocaleDateString()} to ${new Date(end).toLocaleDateString()}`)
+      .text(`Total Readings: ${count}`);
     doc.moveDown();
 
-    readings.forEach((reading, index) => {
-      doc.text(`Reading ${index + 1}:`);
-      doc.text(`Moisture: ${reading.moisture}`);
-      doc.text(`Temperature: ${reading.temperature}`);
-      doc.text(`Humidity: ${reading.humidity}`);
-      doc.text(`Moisture Status: ${reading.moistureStatus}`);
-      doc.text(`Timestamp: ${new Date(reading.timestamp).toLocaleString()}`);
+    // Add statistics
+    doc.fontSize(14).text('Statistics:', { underline: true });
+    doc.fontSize(12)
+      .text(`Average Temperature: ${(stats.totalTemperature / count).toFixed(2)}°C`)
+      .text(`Average Humidity: ${(stats.totalHumidity / count).toFixed(2)}%`)
+      .text(`Average Moisture: ${(stats.totalMoisture / count).toFixed(2)}%`)
+      .text(`Water System Activations: ${stats.waterStateCount}`)
+      .text(`Fertilizer System Activations: ${stats.fertilizerStateCount}`);
+    doc.moveDown();
+
+    // Add readings
+    doc.fontSize(14).text('Recent Readings:', { underline: true });
+    readings.slice(0, 10).forEach((reading, index) => {
+      doc.fontSize(12)
+        .text(`Time: ${reading.timestamp.toLocaleString()}`)
+        .text(`Temperature: ${reading.temperature}°C`)
+        .text(`Humidity: ${reading.humidity}%`)
+        .text(`Moisture: ${reading.moisture}%`)
+        .text(`Status: ${reading.moistureStatus}`)
+        .text(`Water: ${reading.waterState ? "ON" : "OFF"}`)
+        .text(`Fertilizer: ${reading.fertilizerState ? "ON" : "OFF"}`);
       doc.moveDown();
     });
 
-    // End the document
     doc.end();
 
   } catch (error) {
     console.error("❌ Report generation error:", error);
-    res.status(500).json({ 
-      error: "Report generation failed",
-      message: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    res.status(500).json({ error: "Failed to generate report" });
+  }
+});
+
+// Add new report endpoints
+app.get("/api/reports/stats", async (req, res) => {
+  try {
+    const { plantId, start, end } = req.query;
+    
+    if (!plantId || !start || !end) {
+      return res.status(400).json({
+        error: "Missing parameters",
+        example: "/api/reports/stats?plantId=123&start=2024-01-01&end=2024-01-31"
+      });
+    }
+
+    const readings = await getReadingsInRange(plantId, start, end);
+    
+    if (readings.length === 0) {
+      return res.status(404).json({ error: "No data found" });
+    }
+
+    const stats = calculateStats(readings);
+    const count = readings.length;
+
+    res.json({
+      period: { start, end },
+      readingCount: count,
+      averages: {
+        temperature: stats.totalTemperature / count,
+        humidity: stats.totalHumidity / count,
+        moisture: stats.totalMoisture / count
+      },
+      moistureStatus: stats.moistureStatus,
+      systemStats: {
+        waterActivations: stats.waterStateCount,
+        fertilizerActivations: stats.fertilizerStateCount
+      },
+      lastReading: readings[0]
     });
+
+  } catch (error) {
+    console.error("❌ Error generating stats:", error);
+    res.status(500).json({ error: "Failed to generate stats" });
   }
 });
 
