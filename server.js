@@ -158,22 +158,22 @@ app.get("/api/plants/:plantId/latest-sensor-data", async (req, res) => {
 // ==========================
 // ✅ PDF Report Endpoint
 // ==========================
-app.post("/api/reports", async (req, res) => {
+app.get("/api/reports", async (req, res) => {
   try {
-    const { plantId, startDate, endDate } = req.body;
+    const { plantId, start, end } = req.query;  // Changed to use query parameters
     
-    console.log(`📊 Generating report for plant ${plantId}`);
-    console.log(`📅 Date range: ${startDate} to ${endDate}`);
-
-    if (!plantId || !startDate || !endDate) {
-      return res.status(400).json({ error: "Plant ID, start date, and end date are required" });
+    if (!plantId || !start || !end) {
+      return res.status(400).json({ error: "Plant ID, start date, and end date are required as query parameters" });
     }
 
-    // Retrieve sensor data for date range
+    // Rest of the report generation logic is the same
+    console.log(`📊 Generating report for plant ${plantId}`);
+    console.log(`📅 Date range: ${start} to ${end}`);
+
     const snapshot = await db.collection("sensor_data")
       .where("plantId", "==", plantId)
-      .where("timestamp", ">=", admin.firestore.Timestamp.fromDate(new Date(startDate)))
-      .where("timestamp", "<=", admin.firestore.Timestamp.fromDate(new Date(endDate)))
+      .where("timestamp", ">=", admin.firestore.Timestamp.fromDate(new Date(start)))
+      .where("timestamp", "<=", admin.firestore.Timestamp.fromDate(new Date(end)))
       .orderBy("timestamp", "desc")
       .get();
 
@@ -181,7 +181,6 @@ app.post("/api/reports", async (req, res) => {
       return res.status(404).json({ error: "No data found for the selected range" });
     }
 
-    // Process readings
     let readings = [];
     let totalTemperature = 0, totalMoisture = 0, totalHumidity = 0;
     let moistureStats = { dry: 0, moist: 0, wet: 0 };
@@ -213,20 +212,100 @@ app.post("/api/reports", async (req, res) => {
       readings,
     };
 
-    // Generate and send PDF
     const doc = new PDFDocument();
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=plant-report-${plantId}.pdf`);
     
     doc.pipe(res);
 
-    // Add content to PDF
+    doc.fontSize(24).text('Plant Monitoring Report', { align: 'center' });
+    doc.moveDown();
+    doc.fontSize(12).text(`Report Period: ${new Date(start).toLocaleDateString()} to ${new Date(end).toLocaleDateString()}`);
+    doc.moveDown();
+    
+    doc.fontSize(14).text('Sensor Readings');
+    doc.moveDown();
+    
+    readings.forEach(reading => {
+      doc.text(`Date: ${reading.timestamp.toLocaleDateString()}`);
+      doc.text(`Temperature: ${reading.temperature}°C`);
+      doc.text(`Moisture: ${reading.moisture}%`);
+      doc.text(`Humidity: ${reading.humidity}%`);
+      doc.moveDown();
+    });
+
+    doc.end();
+
+  } catch (error) {
+    console.error("❌ Error generating report:", error);
+    res.status(500).json({ error: "Failed to generate report" });
+  }
+});
+
+app.post("/api/reports", async (req, res) => {
+  try {
+    const { plantId, startDate, endDate } = req.body;
+    
+    console.log(`📊 Generating report for plant ${plantId}`);
+    console.log(`📅 Date range: ${startDate} to ${endDate}`);
+
+    if (!plantId || !startDate || !endDate) {
+      return res.status(400).json({ error: "Plant ID, start date, and end date are required" });
+    }
+
+    const snapshot = await db.collection("sensor_data")
+      .where("plantId", "==", plantId)
+      .where("timestamp", ">=", admin.firestore.Timestamp.fromDate(new Date(startDate)))
+      .where("timestamp", "<=", admin.firestore.Timestamp.fromDate(new Date(endDate)))
+      .orderBy("timestamp", "desc")
+      .get();
+
+    if (snapshot.empty) {
+      return res.status(404).json({ error: "No data found for the selected range" });
+    }
+
+    let readings = [];
+    let totalTemperature = 0, totalMoisture = 0, totalHumidity = 0;
+    let moistureStats = { dry: 0, moist: 0, wet: 0 };
+    
+    snapshot.docs.forEach(doc => {
+      const data = doc.data();
+      readings.push({
+        ...data,
+        timestamp: data.timestamp.toDate()
+      });
+      
+      totalTemperature += data.temperature || 0;
+      totalMoisture += data.moisture || 0;
+      totalHumidity += data.humidity || 0;
+      
+      if (data.moistureStatus === 'DRY') moistureStats.dry++;
+      if (data.moistureStatus === 'MOIST') moistureStats.moist++;
+      if (data.moistureStatus === 'WET') moistureStats.wet++;
+    });
+
+    const reportData = {
+      plantId,
+      plantName: "Plant Monitor Report",
+      readingsCount: readings.length,
+      averageTemperature: readings.length ? totalTemperature / readings.length : 0,
+      averageMoisture: readings.length ? totalMoisture / readings.length : 0,
+      averageHumidity: readings.length ? totalHumidity / readings.length : 0,
+      moistureStats,
+      readings,
+    };
+
+    const doc = new PDFDocument();
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=plant-report-${plantId}.pdf`);
+    
+    doc.pipe(res);
+
     doc.fontSize(24).text('Plant Monitoring Report', { align: 'center' });
     doc.moveDown();
     doc.fontSize(12).text(`Report Period: ${new Date(startDate).toLocaleDateString()} to ${new Date(endDate).toLocaleDateString()}`);
     doc.moveDown();
     
-    // Add readings
     doc.fontSize(14).text('Sensor Readings');
     doc.moveDown();
     
