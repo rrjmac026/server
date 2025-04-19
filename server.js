@@ -1,8 +1,6 @@
 const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
-const mysql = require('mysql2/promise');
-const WebSocket = require('ws');
 require("dotenv").config();
 const PDFDocument = require("pdfkit");
 
@@ -75,62 +73,6 @@ function getMoistureStatus(moisture) {
 }
 
 // ==========================
-// ✅ WebSocket Setup
-// ==========================
-const wss = new WebSocket.Server({ noServer: true });
-
-let pollingInterval;
-
-async function fetchLatestSensorData() {
-  try {
-    const [rows] = await pool.query(
-      'SELECT * FROM sensor_data ORDER BY timestamp DESC LIMIT 1'
-    );
-
-    if (rows.length > 0) {
-      const data = rows[0];
-      broadcastSensorData({
-        moisture: data.moisture,
-        temperature: data.temperature,
-        humidity: data.humidity,
-        moistureStatus: data.moisture_status,
-        timestamp: data.timestamp,
-        plantId: data.plant_id
-      });
-    }
-  } catch (error) {
-    console.error('Error fetching sensor data:', error);
-  }
-}
-
-function broadcastSensorData(data) {
-  wss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(JSON.stringify(data));
-    }
-  });
-}
-
-// Start polling when a client connects
-wss.on('connection', (ws) => {
-  console.log('New WebSocket client connected');
-  
-  // Start polling if not already started
-  if (!pollingInterval) {
-    pollingInterval = setInterval(fetchLatestSensorData, 5000); // 5 seconds
-  }
-  
-  ws.on('close', () => {
-    console.log('Client disconnected');
-    // Stop polling if no clients are connected
-    if (wss.clients.size === 0) {
-      clearInterval(pollingInterval);
-      pollingInterval = null;
-    }
-  });
-});
-
-// ==========================
 // ✅ Receive Sensor Data
 // ==========================
 app.post("/api/sensor-data", async (req, res) => {
@@ -163,16 +105,6 @@ app.post("/api/sensor-data", async (req, res) => {
 
     const docRef = await db.collection("sensor_data").add(sensorData);
     console.log(`✅ Data stored in Firestore! (Doc ID: ${docRef.id})`);
-
-    // Immediately broadcast new data
-    broadcastSensorData({
-      moisture: sensorData.moisture,
-      temperature: sensorData.temperature,
-      humidity: sensorData.humidity,
-      moistureStatus: sensorData.moistureStatus,
-      timestamp: sensorData.timestamp.toDate(),
-      plantId: sensorData.plantId
-    });
 
     res.json({
       message: "✅ Sensor data recorded successfully",
