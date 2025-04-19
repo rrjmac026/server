@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
+const WebSocket = require("ws");
 require("dotenv").config();
 const PDFDocument = require("pdfkit");
 
@@ -73,6 +74,29 @@ function getMoistureStatus(moisture) {
 }
 
 // ==========================
+// ✅ WebSocket Setup
+// ==========================
+const wss = new WebSocket.Server({ noServer: true });
+
+// Handle WebSocket connections
+wss.on("connection", (ws) => {
+  console.log("New WebSocket client connected");
+
+  ws.on("close", () => {
+    console.log("Client disconnected");
+  });
+});
+
+// Broadcast sensor data to all connected clients
+function broadcastSensorData(data) {
+  wss.clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify(data));
+    }
+  });
+}
+
+// ==========================
 // ✅ Receive Sensor Data
 // ==========================
 app.post("/api/sensor-data", async (req, res) => {
@@ -106,9 +130,12 @@ app.post("/api/sensor-data", async (req, res) => {
     const docRef = await db.collection("sensor_data").add(sensorData);
     console.log(`✅ Data stored in Firestore! (Doc ID: ${docRef.id})`);
 
+    // Broadcast to all connected clients
+    broadcastSensorData(sensorData);
+
     res.json({
       message: "✅ Sensor data recorded successfully",
-      plantId: plantId
+      plantId: plantId,
     });
   } catch (error) {
     console.error("❌ Error storing data:", error.message);
@@ -156,128 +183,89 @@ app.get("/api/plants/:plantId/latest-sensor-data", async (req, res) => {
 });
 
 // ==========================
-// 📄 Generate PDF Report
-// ==========================
-async function generatePDFReport(data, startDate, endDate, res) {
-  const doc = new PDFDocument();
-
-  // Set headers for PDF response
-  res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", `attachment; filename=plant-report-${data.plantId}.pdf`);
-
-  // Add title and logo
-  doc.fontSize(24).text("Plant Monitoring Report", { align: "center" }).moveDown();
-  
-  // Add date range
-  doc.fontSize(14).text(`Report Period: ${startDate} to ${endDate}`, { align: "center" }).moveDown();
-
-  // Add plant info
-  doc.fontSize(18).text("Plant Information", { underline: true }).moveDown();
-  doc.fontSize(12)
-    .text(`Plant ID: ${data.plantId}`)
-    .text(`Plant Name: ${data.plantName}`)
-    .text(`Total Readings: ${data.readingsCount}`)
-    .moveDown();
-
-  // Add sensor data averages
-  doc.fontSize(18).text("Sensor Data Analysis", { underline: true }).moveDown();
-  doc.fontSize(12)
-    .text(`Average Temperature: ${data.averageTemperature.toFixed(2)}°C`)
-    .text(`Average Moisture: ${data.averageMoisture.toFixed(2)}%`) 
-    .text(`Average Humidity: ${data.averageHumidity.toFixed(2)}%`)
-    .moveDown();
-
-  // Add watering/fertilizing events
-  doc.fontSize(18).text("Maintenance Events", { underline: true }).moveDown();
-  doc.fontSize(12)
-    .text(`Watering Events: ${data.wateringCount}`)
-    .text(`Fertilizing Events: ${data.fertilizingCount}`)
-    .moveDown();
-
-  // Add moisture status distribution
-  doc.fontSize(18).text("Moisture Status Distribution", { underline: true }).moveDown();
-  doc.fontSize(12)
-    .text(`Dry Readings: ${data.moistureStats.dry}`)
-    .text(`Moist Readings: ${data.moistureStats.moist}`) 
-    .text(`Wet Readings: ${data.moistureStats.wet}`)
-    .moveDown();
-
-  // Add data table
-  doc.fontSize(18).text("Sensor Readings", { underline: true }).moveDown();
-  doc.fontSize(12);
-  const readings = data.readings;
-  doc.table({
-    headers: ['Date', 'Temperature', 'Moisture', 'Humidity'],
-    rows: readings.map(reading => [
-      reading.timestamp.toDate().toLocaleDateString(),
-      `${reading.temperature}°C`,
-      `${reading.moisture}%`,
-      `${reading.humidity}%`
-    ])
-  });
-
-  doc.pipe(res);
-  doc.end();
-}
-
 // ✅ PDF Report Endpoint
-app.get("/api/reports/:plantId", async (req, res) => {
+// ==========================
+app.post("/api/reports", async (req, res) => {
   try {
-    const { plantId } = req.params;
-    const { start, end } = req.query;
-
+    const { plantId, startDate, endDate } = req.body;
+    
     console.log(`📊 Generating report for plant ${plantId}`);
-    console.log(`📅 Date range: ${start} to ${end}`);
+    console.log(`📅 Date range: ${startDate} to ${endDate}`);
 
-    if (!plantId || !start || !end) {
+    if (!plantId || !startDate || !endDate) {
       return res.status(400).json({ error: "Plant ID, start date, and end date are required" });
     }
 
     // Retrieve sensor data for date range
     const snapshot = await db.collection("sensor_data")
       .where("plantId", "==", plantId)
-      .where("timestamp", ">=", new Date(start))
-      .where("timestamp", "<=", new Date(end))
+      .where("timestamp", ">=", admin.firestore.Timestamp.fromDate(new Date(startDate)))
+      .where("timestamp", "<=", admin.firestore.Timestamp.fromDate(new Date(endDate)))
+      .orderBy("timestamp", "desc")
       .get();
 
     if (snapshot.empty) {
       return res.status(404).json({ error: "No data found for the selected range" });
     }
 
+    // Process readings
     let readings = [];
     let totalTemperature = 0, totalMoisture = 0, totalHumidity = 0;
     let moistureStats = { dry: 0, moist: 0, wet: 0 };
-    let wateringCount = 0, fertilizingCount = 0;
-
+    
     snapshot.docs.forEach(doc => {
       const data = doc.data();
-      readings.push(data);
-      totalTemperature += data.temperature;
-      totalMoisture += data.moisture;
-      totalHumidity += data.humidity;
+      readings.push({
+        ...data,
+        timestamp: data.timestamp.toDate()
+      });
+      
+      totalTemperature += data.temperature || 0;
+      totalMoisture += data.moisture || 0;
+      totalHumidity += data.humidity || 0;
+      
       if (data.moistureStatus === 'DRY') moistureStats.dry++;
       if (data.moistureStatus === 'MOIST') moistureStats.moist++;
       if (data.moistureStatus === 'WET') moistureStats.wet++;
-      
-      // Placeholder for counting events like watering/fertilizing (you may track these separately)
-      if (data.moistureStatus === "DRY") wateringCount++;
-      if (data.moistureStatus === "MOIST") fertilizingCount++;
     });
 
     const reportData = {
       plantId,
-      plantName: "Your Plant Name",  // Replace with the plant name retrieved from the database
+      plantName: "Plant Monitor Report",
       readingsCount: readings.length,
-      averageTemperature: totalTemperature / readings.length,
-      averageMoisture: totalMoisture / readings.length,
-      averageHumidity: totalHumidity / readings.length,
+      averageTemperature: readings.length ? totalTemperature / readings.length : 0,
+      averageMoisture: readings.length ? totalMoisture / readings.length : 0,
+      averageHumidity: readings.length ? totalHumidity / readings.length : 0,
       moistureStats,
-      wateringCount,
-      fertilizingCount,
       readings,
     };
 
-    generatePDFReport(reportData, start, end, res);
+    // Generate and send PDF
+    const doc = new PDFDocument();
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=plant-report-${plantId}.pdf`);
+    
+    doc.pipe(res);
+
+    // Add content to PDF
+    doc.fontSize(24).text('Plant Monitoring Report', { align: 'center' });
+    doc.moveDown();
+    doc.fontSize(12).text(`Report Period: ${new Date(startDate).toLocaleDateString()} to ${new Date(endDate).toLocaleDateString()}`);
+    doc.moveDown();
+    
+    // Add readings
+    doc.fontSize(14).text('Sensor Readings');
+    doc.moveDown();
+    
+    readings.forEach(reading => {
+      doc.text(`Date: ${reading.timestamp.toLocaleDateString()}`);
+      doc.text(`Temperature: ${reading.temperature}°C`);
+      doc.text(`Moisture: ${reading.moisture}%`);
+      doc.text(`Humidity: ${reading.humidity}%`);
+      doc.moveDown();
+    });
+
+    doc.end();
 
   } catch (error) {
     console.error("❌ Error generating report:", error);
@@ -286,6 +274,13 @@ app.get("/api/reports/:plantId", async (req, res) => {
 });
 
 // ✅ Start the Server
-app.listen(port, () => {
+const server = app.listen(port, () => {
   console.log(`✅ Server started at http://localhost:${port}`);
+});
+
+// Handle upgrade requests for WebSocket
+server.on("upgrade", (request, socket, head) => {
+  wss.handleUpgrade(request, socket, head, (ws) => {
+    wss.emit("connection", ws, request);
+  });
 });
