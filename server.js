@@ -1,7 +1,8 @@
 const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
-const WebSocket = require("ws");
+const mysql = require('mysql2/promise');
+const WebSocket = require('ws');
 require("dotenv").config();
 const PDFDocument = require("pdfkit");
 
@@ -78,23 +79,56 @@ function getMoistureStatus(moisture) {
 // ==========================
 const wss = new WebSocket.Server({ noServer: true });
 
-// Handle WebSocket connections
-wss.on("connection", (ws) => {
-  console.log("New WebSocket client connected");
+let pollingInterval;
 
-  ws.on("close", () => {
-    console.log("Client disconnected");
-  });
-});
+async function fetchLatestSensorData() {
+  try {
+    const [rows] = await pool.query(
+      'SELECT * FROM sensor_data ORDER BY timestamp DESC LIMIT 1'
+    );
 
-// Broadcast sensor data to all connected clients
+    if (rows.length > 0) {
+      const data = rows[0];
+      broadcastSensorData({
+        moisture: data.moisture,
+        temperature: data.temperature,
+        humidity: data.humidity,
+        moistureStatus: data.moisture_status,
+        timestamp: data.timestamp,
+        plantId: data.plant_id
+      });
+    }
+  } catch (error) {
+    console.error('Error fetching sensor data:', error);
+  }
+}
+
 function broadcastSensorData(data) {
-  wss.clients.forEach((client) => {
+  wss.clients.forEach(client => {
     if (client.readyState === WebSocket.OPEN) {
       client.send(JSON.stringify(data));
     }
   });
 }
+
+// Start polling when a client connects
+wss.on('connection', (ws) => {
+  console.log('New WebSocket client connected');
+  
+  // Start polling if not already started
+  if (!pollingInterval) {
+    pollingInterval = setInterval(fetchLatestSensorData, 5000); // 5 seconds
+  }
+  
+  ws.on('close', () => {
+    console.log('Client disconnected');
+    // Stop polling if no clients are connected
+    if (wss.clients.size === 0) {
+      clearInterval(pollingInterval);
+      pollingInterval = null;
+    }
+  });
+});
 
 // ==========================
 // ✅ Receive Sensor Data
@@ -130,12 +164,19 @@ app.post("/api/sensor-data", async (req, res) => {
     const docRef = await db.collection("sensor_data").add(sensorData);
     console.log(`✅ Data stored in Firestore! (Doc ID: ${docRef.id})`);
 
-    // Broadcast to all connected clients
-    broadcastSensorData(sensorData);
+    // Immediately broadcast new data
+    broadcastSensorData({
+      moisture: sensorData.moisture,
+      temperature: sensorData.temperature,
+      humidity: sensorData.humidity,
+      moistureStatus: sensorData.moistureStatus,
+      timestamp: sensorData.timestamp.toDate(),
+      plantId: sensorData.plantId
+    });
 
     res.json({
       message: "✅ Sensor data recorded successfully",
-      plantId: plantId,
+      plantId: plantId
     });
   } catch (error) {
     console.error("❌ Error storing data:", error.message);
@@ -274,13 +315,6 @@ app.post("/api/reports", async (req, res) => {
 });
 
 // ✅ Start the Server
-const server = app.listen(port, () => {
+app.listen(port, () => {
   console.log(`✅ Server started at http://localhost:${port}`);
-});
-
-// Handle upgrade requests for WebSocket
-server.on("upgrade", (request, socket, head) => {
-  wss.handleUpgrade(request, socket, head, (ws) => {
-    wss.emit("connection", ws, request);
-  });
 });
