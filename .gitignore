@@ -1,0 +1,9 @@
+# Secrets and configs
+*.env
+*.pem
+*.key
+*.crt
+*.json
+
+# Specifically ignore service account keys
+service-account.json
