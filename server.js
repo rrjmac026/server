@@ -56,9 +56,12 @@ async function getLatestReading(plantId) {
 
 // Function to determine moisture status
 function getMoistureStatus(moisture) {
-  if (moisture >= 70) return "WET";
-  if (moisture >= 40) return "MOIST";
-  return "DRY";
+  if (moisture === 1023) return "NO DATA";
+  if (moisture >= 1000) return "SENSOR ERROR";
+  if (moisture > 600 && moisture < 1000) return "DRY";
+  if (moisture > 370 && moisture <= 600) return "HUMID";
+  if (moisture <= 370) return "WET";
+  return "NO DATA";
 }
 
 // Add new helper functions
