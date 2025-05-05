@@ -125,36 +125,36 @@ app.post("/api/sensor-data", async (req, res) => {
 // ==========================
 // ✅ Get Latest Sensor Data
 // ==========================
-// app.get("/api/plants/:plantId/latest-sensor-data", async (req, res) => {
-//   try {
-//     const { plantId } = req.params;
-//     console.log(`📡 Fetching latest sensor data for plant ${plantId}`);
+app.get("/api/plants/:plantId/latest-sensor-data", async (req, res) => {
+  try {
+    const { plantId } = req.params;
+    console.log(`📡 Fetching latest sensor data for plant ${plantId}`);
 
-//     const latestReading = await getLatestReading(plantId);
+    const latestReading = await getLatestReading(plantId);
 
-//     if (!latestReading) {
-//       return res.status(404).json({ 
-//         error: 'No sensor data found',
-//         moisture: 0, 
-//         temperature: 0, 
-//         humidity: 0, 
-//         moistureStatus: "NO_DATA" 
-//       });
-//     }
+    if (!latestReading) {
+      return res.status(404).json({ 
+        error: 'No sensor data found',
+        moisture: 0, 
+        temperature: 0, 
+        humidity: 0, 
+        moistureStatus: "NO_DATA" 
+      });
+    }
 
-//     const response = {
-//       moisture: latestReading.moisture || 0,
-//       temperature: latestReading.temperature || 0,
-//       humidity: latestReading.humidity || 0,
-//       moistureStatus: latestReading.moistureStatus || "NO_DATA",
-//       timestamp: moment(latestReading.timestamp).tz('Asia/Manila').format()
-//     };
-//     res.json(response);
-//   } catch (error) {
-//     console.error("❌ Error fetching latest sensor data:", error.message);
-//     res.status(500).json({ error: "Failed to load sensor data" });
-//   }
-// });
+    const response = {
+      moisture: latestReading.moisture || 0,
+      temperature: latestReading.temperature || 0,
+      humidity: latestReading.humidity || 0,
+      moistureStatus: latestReading.moistureStatus || "NO_DATA",
+      timestamp: moment(latestReading.timestamp).tz('Asia/Manila').format()
+    };
+    res.json(response);
+  } catch (error) {
+    console.error("❌ Error fetching latest sensor data:", error.message);
+    res.status(500).json({ error: "Failed to load sensor data" });
+  }
+});
 
 // ==========================
 // ✅ PDF Report Endpoint
