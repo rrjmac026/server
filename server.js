@@ -56,15 +56,17 @@ async function getLatestReading(plantId) {
 
 // Function to determine moisture status
 function getMoistureStatus(moisture) {
-  // Handle error cases
-  if (moisture === null || moisture === undefined) return "NO DATA";
+  // First check for zero/null values which indicate sensor issues
+  if (moisture === 0 || moisture === null || moisture === undefined) {
+    return "NO DATA";
+  }
   
-  // Use percentage ranges
-  if (moisture === 0) return "CRITICALLY DRY";
+  // Use percentage ranges (matching ESP32 logic)
+  if (moisture === 0) return "NO DATA";
   if (moisture <= 30) return "DRY";
   if (moisture <= 60) return "GETTING BETTER";
   if (moisture <= 85) return "HUMID";
-  if (moisture > 85) return "IN WATER";
+  if (moisture > 85) return "WET";
   return "NO DATA";
 }
 
@@ -88,8 +90,9 @@ function calculateStats(readings) {
   return readings.reduce((stats, reading) => {
     stats.totalTemperature += reading.temperature || 0;
     stats.totalHumidity += reading.humidity || 0;
-    stats.totalMoisture += reading.moisture || 0;
-    stats.moistureStatus[reading.moistureStatus.toLowerCase()]++;
+    stats.totalMoisture += (reading.moisture === 0 ? 0 : reading.moisture) || 0;
+    const status = reading.moistureStatus ? reading.moistureStatus.toLowerCase() : 'no_data';
+    stats.moistureStatus[status] = (stats.moistureStatus[status] || 0) + 1;
     stats.waterStateCount += reading.waterState ? 1 : 0;
     stats.fertilizerStateCount += reading.fertilizerState ? 1 : 0;
     return stats;
@@ -97,7 +100,13 @@ function calculateStats(readings) {
     totalTemperature: 0,
     totalHumidity: 0,
     totalMoisture: 0,
-    moistureStatus: { dry: 0, moist: 0, wet: 0 },
+    moistureStatus: { 
+      'no_data': 0,
+      'dry': 0, 
+      'getting_better': 0, 
+      'humid': 0, 
+      'wet': 0 
+    },
     waterStateCount: 0,
     fertilizerStateCount: 0
   });
