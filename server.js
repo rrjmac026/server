@@ -100,27 +100,66 @@ function calculateStats(readings) {
 }
 
 // ==========================
-// ✅ Receive Sensor Data
+// ✅ Receive POST Sensor Data (from ESP32)
 // ==========================
 app.post("/api/sensor-data", async (req, res) => {
   try {
-    const { moisture, temperature, humidity, plantId } = req.body;
-    
-    const sensorData = {
-      moisture: moisture || 0,
-      temperature: temperature || 0,
-      humidity: humidity || 0,
-      plantId,
-      moistureStatus: getMoistureStatus(moisture)
-    };
+    const data = req.body;
 
-    await saveSensorData(sensorData);
-    res.json({ message: "✅ Sensor data recorded successfully", plantId });
+    // Optional: Validate incoming data
+    if (!data.plantId || data.moisture == null || data.temperature == null || data.humidity == null) {
+      return res.status(400).json({ error: "Incomplete sensor data" });
+    }
+
+    // Determine moisture status
+    data.moistureStatus = getMoistureStatus(data.moisture);
+
+    // Save to Firestore
+    const savedDoc = await saveSensorData(data);
+    res.status(201).json({ message: "Sensor data saved", id: savedDoc.id });
   } catch (error) {
-    console.error("❌ Error storing data:", error);
-    res.status(500).json({ error: "Internal Server Error" });
+    console.error("❌ Error saving sensor data:", error.message);
+    res.status(500).json({ error: "Failed to save sensor data" });
   }
 });
+
+// ==========================
+// ✅ Receive Sensor Data
+// ==========================
+app.get("/api/sensor-data", async (req, res) => {
+  try {
+    const { plantId } = req.query;
+    if (!plantId) {
+      return res.status(400).json({ error: "Missing plantId" });
+    }
+
+    const latestReading = await getLatestReading(plantId);
+
+    if (!latestReading) {
+      return res.status(404).json({
+        error: 'No sensor data found',
+        moisture: 0, 
+        temperature: 0, 
+        humidity: 0, 
+        moistureStatus: "NO_DATA" 
+      });
+    }
+
+    const response = {
+      moisture: latestReading.moisture || 0,
+      temperature: latestReading.temperature || 0,
+      humidity: latestReading.humidity || 0,
+      moistureStatus: latestReading.moistureStatus || "NO_DATA",
+      timestamp: moment(latestReading.timestamp).tz('Asia/Manila').format()
+    };
+
+    res.json(response);
+  } catch (error) {
+    console.error("❌ Error fetching sensor data:", error.message);
+    res.status(500).json({ error: "Failed to load sensor data" });
+  }
+});
+
 
 // ==========================
 // ✅ Get Latest Sensor Data
