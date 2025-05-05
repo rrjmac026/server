@@ -271,6 +271,83 @@ app.get("/api/reports", async (req, res) => {
   }
 });
 
+// ==========================
+// ✅ PDF Report Endpoint (with URL params)
+// ==========================
+app.get("/api/reports/:plantId", async (req, res) => {
+  try {
+    const { plantId } = req.params;
+    const { start, end, format = 'pdf' } = req.query;
+    
+    if (!start || !end) {
+      return res.status(400).json({
+        error: "Missing parameters",
+        example: "/api/reports/PLANT123?start=2024-01-01&end=2024-01-31&format=pdf|json"
+      });
+    }
+
+    const readings = await getReadingsInRange(plantId, start, end);
+    
+    if (readings.length === 0) {
+      return res.status(404).json({ error: "No data found" });
+    }
+
+    const stats = calculateStats(readings);
+    const count = readings.length;
+
+    // Return JSON if requested
+    if (format === 'json') {
+      return res.json({ readings, stats });
+    }
+
+    // Generate PDF report
+    const doc = new PDFDocument();
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=plant-report-${plantId}.pdf`);
+    
+    doc.pipe(res);
+
+    // Enhanced PDF content
+    doc.fontSize(24).text('Plant Monitoring Report', { align: 'center' });
+    doc.moveDown();
+    doc.fontSize(12)
+      .text(`Plant ID: ${plantId}`)
+      .text(`Report Period: ${moment(start).tz('Asia/Manila').format('YYYY-MM-DD LT')} to ${moment(end).tz('Asia/Manila').format('YYYY-MM-DD LT')}`)
+      .text(`Total Readings: ${count}`);
+    doc.moveDown();
+
+    // Add statistics
+    doc.fontSize(14).text('Statistics:', { underline: true });
+    doc.fontSize(12)
+      .text(`Average Temperature: ${(stats.totalTemperature / count).toFixed(2)}°C`)
+      .text(`Average Humidity: ${(stats.totalHumidity / count).toFixed(2)}%`)
+      .text(`Average Moisture: ${(stats.totalMoisture / count).toFixed(2)}%`)
+      .text(`Water System Activations: ${stats.waterStateCount}`)
+      .text(`Fertilizer System Activations: ${stats.fertilizerStateCount}`);
+    doc.moveDown();
+
+    // Add readings
+    doc.fontSize(14).text('Recent Readings:', { underline: true });
+    readings.slice(0, 10).forEach((reading) => {
+      doc.fontSize(12)
+        .text(`Time: ${moment(reading.timestamp).tz('Asia/Manila').format('YYYY-MM-DD LT')}`)
+        .text(`Temperature: ${reading.temperature}°C`)
+        .text(`Humidity: ${reading.humidity}%`)
+        .text(`Moisture: ${reading.moisture}%`)
+        .text(`Status: ${reading.moistureStatus}`)
+        .text(`Water: ${reading.waterState ? "ON" : "OFF"}`)
+        .text(`Fertilizer: ${reading.fertilizerState ? "ON" : "OFF"}`);
+      doc.moveDown();
+    });
+
+    doc.end();
+
+  } catch (error) {
+    console.error("❌ Report generation error:", error);
+    res.status(500).json({ error: "Failed to generate report" });
+  }
+});
+
 // Add new report endpoints
 app.get("/api/reports/stats", async (req, res) => {
   try {
