@@ -397,13 +397,14 @@ app.get("/api/reports/stats", async (req, res) => {
 
 // Helper function to validate schedule data
 function validateScheduleData(data) {
-  const { plantId, type, time, days, duration, enabled } = data;
+  const { plantId, type, time, days, duration, enabled, label } = data;
   
   if (!plantId) return 'Plant ID is required';
   if (!type || !['watering', 'fertilizing'].includes(type)) return 'Valid type (watering or fertilizing) is required';
   if (!time || !time.match(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/)) return 'Valid time in HH:MM format is required';
   if (!days || !Array.isArray(days) || days.length === 0) return 'At least one day of the week is required';
   if (!duration || duration < 1 || duration > 60) return 'Duration must be between 1 and 60 minutes';
+  // Label is optional, no validation needed
   
   return null; // No validation errors
 }
@@ -440,12 +441,19 @@ app.post('/api/schedules', async (req, res) => {
 app.get('/api/schedules/:plantId', async (req, res) => {
   try {
     const { plantId } = req.params;
+    const { enabled } = req.query; // Optional query parameter to filter by enabled status
     
-    // Get schedules from Firestore
-    const schedulesSnapshot = await db.collection('schedules')
-      .where('plantId', '==', plantId)
-      .orderBy('createdAt', 'desc')
-      .get();
+    // Create base query
+    let query = db.collection('schedules').where('plantId', '==', plantId);
+    
+    // Add enabled filter if specified
+    if (enabled !== undefined) {
+      const enabledBool = enabled === 'true';
+      query = query.where('enabled', '==', enabledBool);
+    }
+    
+    // Add ordering
+    const schedulesSnapshot = await query.orderBy('createdAt', 'desc').get();
 
     const schedules = schedulesSnapshot.docs.map(doc => ({
       id: doc.id,
@@ -499,28 +507,8 @@ app.delete('/api/schedules/:scheduleId', async (req, res) => {
   }
 });
 
-// Add new polling endpoint for schedules
-app.get('/api/schedules/:plantId', async (req, res) => {
-    try {
-        const { plantId } = req.params;
-        
-        // Get schedules from Firestore
-        const schedulesSnapshot = await db.collection("schedules")
-            .where("plantId", "==", plantId)
-            .where("enabled", "==", true)
-            .get();
-
-        const schedules = schedulesSnapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-        }));
-
-        res.json({ schedules });
-    } catch (error) {
-        console.error("Error fetching schedules:", error);
-        res.status(500).json({ error: "Failed to fetch schedules" });
-    }
-});
+// Note: The polling endpoint for schedules has been merged with the main GET endpoint
+// Use /api/schedules/:plantId?enabled=true to get only enabled schedules
 
 // ✅ Start the Server
 app.listen(port, () => {
