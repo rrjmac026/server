@@ -392,24 +392,111 @@ app.get("/api/reports/stats", async (req, res) => {
 });
 
 // ==========================
-// ✅ Schedule Endpoint
+// ✅ Scheduling Functions
 // ==========================
-app.post('/api/schedule', async (req, res) => {
-    try {
-        const { type, time, duration, enabled } = req.body;
-        
-        // Save schedule to database
-        const schedule = await Schedule.create({
-            type, // 'watering' or 'fertilizing'
-            time,
-            duration,
-            enabled
-        });
 
-        res.json({ success: true, schedule });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
+// Helper function to validate schedule data
+function validateScheduleData(data) {
+  const { plantId, type, time, days, duration, enabled } = data;
+  
+  if (!plantId) return 'Plant ID is required';
+  if (!type || !['watering', 'fertilizing'].includes(type)) return 'Valid type (watering or fertilizing) is required';
+  if (!time || !time.match(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/)) return 'Valid time in HH:MM format is required';
+  if (!days || !Array.isArray(days) || days.length === 0) return 'At least one day of the week is required';
+  if (!duration || duration < 1 || duration > 60) return 'Duration must be between 1 and 60 minutes';
+  
+  return null; // No validation errors
+}
+
+// Create a new schedule
+app.post('/api/schedules', async (req, res) => {
+  try {
+    const scheduleData = req.body;
+    
+    // Validate schedule data
+    const validationError = validateScheduleData(scheduleData);
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
     }
+    
+    // Add timestamp
+    scheduleData.createdAt = admin.firestore.FieldValue.serverTimestamp();
+    
+    // Save to Firestore
+    const docRef = await db.collection('schedules').add(scheduleData);
+    
+    res.status(201).json({ 
+      success: true, 
+      id: docRef.id,
+      schedule: scheduleData 
+    });
+  } catch (error) {
+    console.error('❌ Error creating schedule:', error);
+    res.status(500).json({ error: 'Failed to create schedule' });
+  }
+});
+
+// Get all schedules for a plant
+app.get('/api/schedules/:plantId', async (req, res) => {
+  try {
+    const { plantId } = req.params;
+    
+    // Get schedules from Firestore
+    const schedulesSnapshot = await db.collection('schedules')
+      .where('plantId', '==', plantId)
+      .orderBy('createdAt', 'desc')
+      .get();
+
+    const schedules = schedulesSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt ? doc.data().createdAt.toDate() : null
+    }));
+
+    res.json({ schedules });
+  } catch (error) {
+    console.error('❌ Error fetching schedules:', error);
+    res.status(500).json({ error: 'Failed to fetch schedules' });
+  }
+});
+
+// Update a schedule
+app.put('/api/schedules/:scheduleId', async (req, res) => {
+  try {
+    const { scheduleId } = req.params;
+    const updateData = req.body;
+    
+    // Validate update data
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ error: 'No update data provided' });
+    }
+    
+    // Update in Firestore
+    await db.collection('schedules').doc(scheduleId).update({
+      ...updateData,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    
+    res.json({ success: true, id: scheduleId });
+  } catch (error) {
+    console.error('❌ Error updating schedule:', error);
+    res.status(500).json({ error: 'Failed to update schedule' });
+  }
+});
+
+// Delete a schedule
+app.delete('/api/schedules/:scheduleId', async (req, res) => {
+  try {
+    const { scheduleId } = req.params;
+    
+    // Delete from Firestore
+    await db.collection('schedules').doc(scheduleId).delete();
+    
+    res.json({ success: true, id: scheduleId });
+  } catch (error) {
+    console.error('❌ Error deleting schedule:', error);
+    res.status(500).json({ error: 'Failed to delete schedule' });
+  }
 });
 
 // Add new polling endpoint for schedules
