@@ -443,8 +443,6 @@ app.get('/api/schedules/:plantId', async (req, res) => {
     const { plantId } = req.params;
     const { enabled } = req.query; // Optional query parameter to filter by enabled status
     
-    console.log(`📅 Fetching schedules for plant ${plantId}, enabled filter: ${enabled}`);
-    
     // Create base query
     let query = db.collection('schedules').where('plantId', '==', plantId);
     
@@ -455,27 +453,22 @@ app.get('/api/schedules/:plantId', async (req, res) => {
     }
     
     // Get the documents without ordering by createdAt to avoid index issues
+    // This is a temporary solution until the composite index is created
     const schedulesSnapshot = await query.get();
-    console.log(`📅 Found ${schedulesSnapshot.size} schedules`);
 
     // Sort the results in memory instead of using Firestore's orderBy
-    const schedules = schedulesSnapshot.docs.map(doc => {
-      const data = doc.data();
-      return {
-        id: doc.id,
-        ...data,
-        createdAt: data.createdAt ? data.createdAt.toDate() : new Date(),
-        // Ensure all required fields have default values if missing
-        type: data.type || 'watering',
-        time: data.time || '12:00',
-        days: data.days || ['Monday'],
-        duration: data.duration || 5,
-        enabled: data.enabled !== undefined ? data.enabled : true
-      };
-    });
+    const schedules = schedulesSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt ? doc.data().createdAt.toDate() : null
+    }));
 
     // Sort in memory by createdAt in descending order
-    schedules.sort((a, b) => b.createdAt - a.createdAt);
+    schedules.sort((a, b) => {
+      if (!a.createdAt) return 1;
+      if (!b.createdAt) return -1;
+      return b.createdAt - a.createdAt;
+    });
 
     res.json({ schedules });
   } catch (error) {
