@@ -391,6 +391,50 @@ app.get("/api/reports/stats", async (req, res) => {
   }
 });
 
+// ==========================
+// ✅ Schedule Endpoint
+// ==========================
+app.post('/api/schedule', async (req, res) => {
+    try {
+        const { type, time, duration, enabled } = req.body;
+        
+        // Save schedule to database
+        const schedule = await Schedule.create({
+            type, // 'watering' or 'fertilizing'
+            time,
+            duration,
+            enabled
+        });
+
+        res.json({ success: true, schedule });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Add new polling endpoint for schedules
+app.get('/api/schedules/:plantId', async (req, res) => {
+    try {
+        const { plantId } = req.params;
+        
+        // Get schedules from Firestore
+        const schedulesSnapshot = await db.collection("schedules")
+            .where("plantId", "==", plantId)
+            .where("enabled", "==", true)
+            .get();
+
+        const schedules = schedulesSnapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+        }));
+
+        res.json({ schedules });
+    } catch (error) {
+        console.error("Error fetching schedules:", error);
+        res.status(500).json({ error: "Failed to fetch schedules" });
+    }
+});
+
 // ✅ Start the Server
 app.listen(port, () => {
   console.log(`✅ Server started at http://localhost:${port}`);
