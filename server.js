@@ -159,46 +159,54 @@ function calculateStats(readings) {
 // ✅ Receive POST Sensor Data (from ESP32)
 // ==========================
 app.post("/api/sensor-data", async (req, res) => {
-  const startTime = Date.now();
-  const { moisture, pumpState, temperature, humidity, requestId, deviceId, timestamp } = req.body;
+    const startTime = Date.now();
+    const { moisture, pumpState, temperature, humidity, requestId, plantId, moistureStatus } = req.body;
 
-  // Log incoming request
-  console.log(`\n📥 Incoming data at ${new Date().toISOString()}`);
-  console.log(`RequestID: ${requestId}`);
-  console.log(`DeviceID: ${deviceId}`);
-  console.log(`Data: `, req.body);
+    // Generate a requestId if none provided
+    const documentId = requestId || `auto-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-  // Check for duplicate request
-  if (recentRequests.has(requestId)) {
-      console.log(`⚠️ Duplicate request detected: ${requestId}`);
-      return res.status(409).json({ error: 'Duplicate request' });
-  }
+    // Log incoming request
+    console.log(`\n📥 Incoming data at ${new Date().toISOString()}`);
+    console.log(`RequestID: ${documentId}`);
+    console.log(`PlantId: ${plantId}`);
+    console.log(`Data: `, req.body);
 
-  try {
-      // Add document with requestId as the document ID to ensure uniqueness
-      const docRef = admin.firestore().collection('readings').doc(requestId);
-      await docRef.set({
-          moisture,
-          pumpState,
-          temperature,
-          humidity,
-          deviceId,
-          timestamp,
-          requestId,
-          serverTimestamp: admin.firestore.FieldValue.serverTimestamp(),
-          processingTime: Date.now() - startTime
-      });
+    // Check for duplicate request
+    if (recentRequests.has(documentId)) {
+        console.log(`⚠️ Duplicate request detected: ${documentId}`);
+        return res.status(409).json({ error: 'Duplicate request' });
+    }
 
-      // Record this request
-      recentRequests.set(requestId, Date.now());
+    try {
+        // Validate required fields
+        if (!plantId || moisture === undefined) {
+            throw new Error('Missing required fields: plantId and moisture are required');
+        }
 
-      console.log(`✅ Data saved successfully (${Date.now() - startTime}ms)`);
-      res.status(200).json({ success: true });
+        // Add document with generated ID to ensure uniqueness
+        const docRef = db.collection('sensor_data').doc(documentId);
+        await docRef.set({
+            plantId,
+            moisture,
+            pumpState,
+            temperature,
+            humidity,
+            moistureStatus,
+            requestId: documentId,
+            timestamp: admin.firestore.FieldValue.serverTimestamp(),
+            processingTime: Date.now() - startTime
+        });
 
-  } catch (error) {
-      console.error('❌ Error saving data:', error);
-      res.status(500).json({ error: 'Failed to save data' });
-  }
+        // Record this request
+        recentRequests.set(documentId, Date.now());
+
+        console.log(`✅ Data saved successfully (${Date.now() - startTime}ms)`);
+        res.status(200).json({ success: true, id: documentId });
+
+    } catch (error) {
+        console.error('❌ Error saving data:', error);
+        res.status(500).json({ error: error.message });
+    }
 });
 
 // ==========================

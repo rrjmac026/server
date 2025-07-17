@@ -491,17 +491,19 @@ bool sendDataToServer(int moisture, bool pumpState, float temperature, float hum
         return false;
     }
 
-    // Generate unique request ID
+    // Generate unique request ID using timestamp and random number
     String requestId = String(millis()) + "-" + String(random(0, 1000000));
+    String moistureStatus = getMoistureStatus(moisture);
     
-    StaticJsonDocument<200> doc;
+    StaticJsonDocument<300> doc;
+    doc["plantId"] = FIXED_PLANT_ID;
+    doc["requestId"] = requestId;
     doc["moisture"] = moisture;
     doc["pumpState"] = pumpState;
     doc["temperature"] = temperature;
     doc["humidity"] = humidity;
+    doc["moistureStatus"] = moistureStatus;
     doc["timestamp"] = getFormattedTime();
-    doc["requestId"] = requestId;
-    doc["deviceId"] = FIXED_PLANT_ID;
 
     String jsonString;
     serializeJson(doc, jsonString);
