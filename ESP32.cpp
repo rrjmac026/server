@@ -6,6 +6,8 @@
 #include <ArduinoJson.h>
 #include <queue>
 #include <map>
+#include <esp_task_wdt.h>
+#include <WiFiClientSecure.h>
 
 const int waterRelayPin = 26;
 const int fertilizerRelayPin = 23;
@@ -37,8 +39,8 @@ int historyIndex = 0;
 bool rapidDrying = false;
 
 // Network credentials
-const char* ssid = "B880-E80A";
-const char* password = "EDD9C205";
+const char* ssid = "krezi";
+const char* password = "12345678";
 
 // Server Details
 const char* serverUrl = "http://192.168.1.8:3000/api/sensor-data";
@@ -79,6 +81,9 @@ unsigned long lastPollTime = 0;
 unsigned long lastDHTReadTime = 0;
 const unsigned long DHT_READ_INTERVAL = 2000;  // Read DHT every 2 seconds
 
+// Add missing variable for minute tracking
+int currentMinute = -1;
+
 // SMS queue structure
 struct SMSMessage {
     String message;
@@ -90,239 +95,251 @@ const int MAX_SMS_RETRIES = 3;
 unsigned long lastSMSAttempt = 0;
 const unsigned long SMS_RETRY_INTERVAL = 10000;  // 10 seconds between retries
 
-String readGSMResponse() {
+// Add these constants after other GSM definitions
+enum GSMStatus {
+    GSM_ERROR,
+    GSM_READY,
+    GSM_WAITING
+};
+
+GSMStatus gsmStatus = GSM_WAITING;
+unsigned long lastGSMRetry = 0;
+const unsigned long GSM_RETRY_INTERVAL = 60000; // 1 minute between retries
+
+// Replace readGSMResponse with improved version
+String readGSMResponse(unsigned long timeout = 5000) {
     String response = "";
     unsigned long startTime = millis();
-    while (millis() - startTime < 5000) {
+    while (millis() - startTime < timeout) {
         while (sim900.available()) {
             char c = sim900.read();
             response += c;
+            delay(1); // Give a tiny delay to allow buffer to fill
+        }
+        if (response.indexOf("OK") >= 0 || response.indexOf("ERROR") >= 0) {
+            break; // Exit early if we got a definitive response
         }
     }
     return response;
 }
 
-void initGSM() {
+// Replace initGSM with improved version
+bool initGSM() {
+    Serial.println("\n📱 Initializing GSM Module...");
     sim900.begin(9600, SERIAL_8N1, RXD2, TXD2);
     delay(3000);
 
-    Serial.println("Initializing SIM900...");
+    // Test AT command
     sim900.println("AT");
-    delay(1000);
-    String response = readGSMResponse();
-    Serial.println("AT Response: " + response);
-
-    // Check network
-    sim900.println("AT+CREG?");
-    delay(1000);
-    response = readGSMResponse();
-    Serial.println("Network Registration: " + response);
-
-    sim900.println("AT+CMGF=1");
-    delay(1000);
-    readGSMResponse();
-}
-
-void sendSMS(const char* message) {
-    for(int i = 0; i < numPhones; i++) {
-        Serial.println("\n📨 Sending SMS...");
-        
-        sim900.print("AT+CMGS=\"");
-        sim900.print(phoneNumbers[i]);
-        sim900.println("\"");
-        delay(1000);
-
-        sim900.print(message);
-        sim900.write(26);  // Ctrl+Z to send
-        delay(5000);
-
-        String response = readGSMResponse();
-        Serial.println("Response: " + response);
-
-        if (response.indexOf("OK") >= 0 && response.indexOf("+CMGS") >= 0) {
-            Serial.println("✅ SMS sent successfully");
-        } else {
-            Serial.println("❌ SMS failed");
-        }
-    }
-}
-
-void sendDataToServer(int moistureValue, bool pumpState, float temperature, float humidity) {
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("❌ WiFi disconnected, reconnecting...");
-        WiFi.reconnect();
-        return;
-    }
-
-    HTTPClient http1, http2;
-    http1.setTimeout(10000);
-    http2.setTimeout(10000);
-
-    String jsonData = "{\"plantId\":\"" + String(FIXED_PLANT_ID) + 
-                     "\",\"moisture\":" + String(moistureValue) + 
-                     ",\"pumpState\":" + String(pumpState ? "true" : "false") + 
-                     ",\"temperature\":" + String(temperature) + 
-                     ",\"humidity\":" + String(humidity) + 
-                     ",\"moistureStatus\":\"" + getMoistureStatus(moistureValue) + "\"}";
-
-    bool server1Success = false;
-    bool server2Success = false;
-
-    // Send to first server
-    if (http1.begin(serverUrl)) {
-        http1.addHeader("Content-Type", "application/json");
-        int httpCode1 = http1.POST(jsonData);
-        server1Success = (httpCode1 == 200 || httpCode1 == 201);
-        Serial.printf("Server 1 Response: %d\n", httpCode1);
-        http1.end();
-    }
-
-    // Send to second server
-    if (http2.begin(serverUrl2)) {
-        http2.addHeader("Content-Type", "application/json");
-        int httpCode2 = http2.POST(jsonData);
-        server2Success = (httpCode2 == 200 || httpCode2 == 201);
-        Serial.printf("Server 2 Response: %d\n", httpCode2);
-        http2.end();
-    }
-
-    if (server1Success || server2Success) {
-        Serial.println("✅ Data sent to at least one server successfully");
-    } else {
-        Serial.println("❌ Failed to send data to all servers");
-    }
-}
-
-String getMoistureStatus(int value) {
-    if (value >= 1023) {
-        return "NO DATA: Sensor reading at maximum value";
-    } else if (value >= 1000) {
-        return "SENSOR ERROR: Not in soil or disconnected";
-    } else if (value > 600 && value < 1000) {
-        return "DRY SOIL: Watering needed";
-    } else if (value >= 370 && value <= 600) {
-        return "HUMID SOIL: Good condition";
-    } else {
-        return "IN WATER: Sensor in water or very wet soil";
-    }
-}
-
-bool syncTime() {
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("Cannot sync time - WiFi not connected");
+    String response = readGSMResponse(1000);
+    if (response.indexOf("OK") == -1) {
+        Serial.println("❌ GSM not responding");
+        gsmStatus = GSM_ERROR;
         return false;
     }
-    
-    Serial.println("Syncing time...");
-    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-    
-    int retries = 0;
-    const int maxRetries = 5;
-    struct tm timeinfo;
-    
-    while(!getLocalTime(&timeinfo) && retries < maxRetries) {
-        Serial.println("Failed to obtain time, retrying...");
-        delay(1000);
-        retries++;
+
+    // Reset to factory defaults
+    sim900.println("ATZ");
+    if (readGSMResponse().indexOf("OK") == -1) {
+        Serial.println("❌ GSM reset failed");
+        gsmStatus = GSM_ERROR;
+        return false;
     }
-    
-    if (retries < maxRetries) {
-        char timeStringBuff[50];
-        strftime(timeStringBuff, sizeof(timeStringBuff), "%A, %B %d %Y %H:%M:%S", &timeinfo);
-        Serial.println("Time synchronized: " + String(timeStringBuff));
-        return true;
+
+    // Check network registration
+    int networkRetries = 0;
+    bool networkRegistered = false;
+    while (networkRetries < 5 && !networkRegistered) {
+        sim900.println("AT+CREG?");
+        response = readGSMResponse();
+        if (response.indexOf("+CREG: 0,1") >= 0 || response.indexOf("+CREG: 0,5") >= 0) {
+            networkRegistered = true;
+        } else {
+            networkRetries++;
+            Serial.println("📱 Waiting for network... Attempt " + String(networkRetries));
+            delay(2000);
+        }
     }
-    
-    Serial.println("Failed to sync time after " + String(maxRetries) + " attempts");
-    return false;
+
+    if (!networkRegistered) {
+        Serial.println("❌ Network registration failed");
+        gsmStatus = GSM_ERROR;
+        return false;
+    }
+
+    // Set SMS text mode
+    sim900.println("AT+CMGF=1");
+    if (readGSMResponse().indexOf("OK") == -1) {
+        Serial.println("❌ Failed to set SMS mode");
+        gsmStatus = GSM_ERROR;
+        return false;
+    }
+
+    // Check signal quality
+    sim900.println("AT+CSQ");
+    response = readGSMResponse();
+    if (response.indexOf("+CSQ:") >= 0) {
+        Serial.println("📶 Signal Quality: " + response);
+    }
+
+    gsmStatus = GSM_READY;
+    Serial.println("✅ GSM Module Ready");
+    return true;
 }
 
-void fetchSchedules() {
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("WiFi disconnected");
+// Add new GSM recovery function
+void checkGSMStatus() {
+    if (gsmStatus == GSM_ERROR && millis() - lastGSMRetry >= GSM_RETRY_INTERVAL) {
+        Serial.println("🔄 Attempting GSM recovery...");
+        if (initGSM()) {
+            Serial.println("✅ GSM Module recovered");
+        } else {
+            Serial.println("❌ GSM recovery failed");
+        }
+        lastGSMRetry = millis();
+    }
+}
+
+// Replace sendSMS with improved version
+bool sendSMS(const char* message, const char* phoneNumber) {
+    if (gsmStatus != GSM_READY) {
+        Serial.println("❌ GSM not ready");
+        return false;
+    }
+
+    Serial.println("📨 Sending SMS to " + String(phoneNumber));
+    
+    // Check if module is responsive
+    sim900.println("AT");
+    if (readGSMResponse(1000).indexOf("OK") == -1) {
+        Serial.println("❌ GSM not responding");
+        gsmStatus = GSM_ERROR;
+        return false;
+    }
+
+    // Send SMS command
+    sim900.print("AT+CMGS=\"");
+    sim900.print(phoneNumber);
+    sim900.println("\"");
+    
+    delay(100);
+    String response = readGSMResponse(1000);
+    if (response.indexOf(">") == -1) {
+        Serial.println("❌ Failed to get SMS prompt");
+        return false;
+    }
+
+    // Send message content
+    sim900.print(message);
+    sim900.write(26);  // Ctrl+Z
+    
+    response = readGSMResponse(10000); // Longer timeout for SMS sending
+    bool success = (response.indexOf("OK") >= 0 && response.indexOf("+CMGS:") >= 0);
+    
+    if (success) {
+        Serial.println("✅ SMS sent successfully");
+    } else {
+        Serial.println("❌ Failed to send SMS");
+        if (response.indexOf("ERROR") >= 0) {
+            gsmStatus = GSM_ERROR;
+        }
+    }
+    
+    return success;
+}
+
+// Update processSMSQueue to use new error handling
+void processSMSQueue() {
+    if (gsmStatus != GSM_READY) {
+        checkGSMStatus();
         return;
     }
 
-    HTTPClient http;
-    String url = String(serverUrl) + "/schedules/" + String(FIXED_PLANT_ID);
-    
-    if (http.begin(url)) {
-        int httpCode = http.GET();
-        
-        if (httpCode == HTTP_CODE_OK) {
-            String payload = http.getString();
-            
-            // Parse JSON response
-            StaticJsonDocument<1024> doc;
-            DeserializationError error = deserializeJson(doc, payload);
-            
-            if (!error) {
-                // Clear existing schedules
-                schedules.clear();
-                
-                // Add new schedules
-                JsonArray schedulesArray = doc["schedules"];
-                for (JsonObject scheduleObj : schedulesArray) {
-                    Schedule schedule;
-                    schedule.id = scheduleObj["id"].as<int>();
-                    schedule.type = scheduleObj["type"].as<String>();
-                    schedule.time = scheduleObj["time"].as<String>();
-                    schedule.duration = scheduleObj["duration"].as<int>();
-                    schedule.enabled = scheduleObj["enabled"].as<bool>();
-                    schedules.push_back(schedule);
-                }
+    if (smsQueue.empty() || millis() - lastSMSAttempt < SMS_RETRY_INTERVAL) {
+        return;
+    }
+
+    SMSMessage& sms = smsQueue.front();
+    if (millis() >= sms.nextAttempt) {
+        lastSMSAttempt = millis();
+        bool success = false;
+
+        for (int i = 0; i < numPhones && !success; i++) {
+            success = sendSMS(sms.message.c_str(), phoneNumbers[i]);
+            if (!success && gsmStatus == GSM_ERROR) {
+                break; // Exit if GSM module is in error state
             }
         }
-        http.end();
+
+        if (success || sms.retries >= MAX_SMS_RETRIES) {
+            smsQueue.pop();
+        } else {
+            sms.retries++;
+            sms.nextAttempt = millis() + SMS_RETRY_INTERVAL;
+        }
     }
 }
 
 void setup() {
-  analogReadResolution(10); // Use 0–1023 range
-  pinMode(waterRelayPin, OUTPUT);
-  digitalWrite(waterRelayPin, LOW); // Start with pump OFF
-  pinMode(fertilizerRelayPin, OUTPUT);
-  digitalWrite(fertilizerRelayPin, LOW); // Start with fertilizer OFF
+    analogReadResolution(10); // Use 0–1023 range
+    pinMode(waterRelayPin, OUTPUT);
+    digitalWrite(waterRelayPin, LOW); // Start with pump OFF
+    pinMode(fertilizerRelayPin, OUTPUT);
+    digitalWrite(fertilizerRelayPin, LOW); // Start with fertilizer OFF
 
-  Serial.begin(115200);
+    Serial.begin(115200);
 
-  // Connect to WiFi with retry
-  WiFi.begin(ssid, password);
-  int attempts = 0;
-  Serial.print("Connecting to WiFi");
-  
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-      delay(500);
-      Serial.print(".");
-      attempts++;
-  }
+    // Connect to WiFi with retry
+    WiFi.begin(ssid, password);
+    int attempts = 0;
+    Serial.print("Connecting to WiFi");
+    
+    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+        delay(500);
+        Serial.print(".");
+        attempts++;
+    }
 
-  if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("\n✅ Connected to WiFi!");
-      Serial.println("📡 IP: " + WiFi.localIP().toString());
-      
-      // Try to sync time with retries
-      if (syncTime()) {
-          Serial.println("✅ Time synchronized successfully");
-      } else {
-          Serial.println("❌ Time sync failed - system will restart");
-          ESP.restart();
-      }
-  } else {
-      Serial.println("\n❌ WiFi Connection Failed!");
-      ESP.restart();
-  }
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("\n✅ Connected to WiFi!");
+        Serial.println("📡 IP: " + WiFi.localIP().toString());
+        
+        // Try to sync time with retries
+        if (syncTime()) {
+            Serial.println("✅ Time synchronized successfully");
+        } else {
+            Serial.println("❌ Time sync failed - system will restart");
+            ESP.restart();
+        }
+    } else {
+        Serial.println("\n❌ WiFi Connection Failed!");
+        ESP.restart();
+    }
 
-  dht.begin();
-  Serial.println("DHT sensor initialized");
+    dht.begin();
+    Serial.println("DHT sensor initialized");
 
-  // Initialize GSM module
-  initGSM();
-  Serial.println("GSM Module Ready");
+    // Initialize GSM module
+    if (!initGSM()) {
+        Serial.println("⚠️ GSM initialization failed - will retry later");
+    }
+    Serial.println("GSM Module Ready");
 
-  // Initialize watchdog
-  esp_task_wdt_init(30, true); // 30 second timeout
-  esp_task_wdt_add(NULL);
+    // Initialize watchdog
+    esp_task_wdt_config_t wdt_config = {
+      .timeout_ms = 30000,                      // 30 seconds
+      .idle_core_mask = (1 << portNUM_PROCESSORS) - 1,  // Both cores
+      .trigger_panic = true                     // Reset on WDT timeout
+    };
+
+    esp_task_wdt_init(&wdt_config);
+ // 30 second timeout
+    esp_task_wdt_add(NULL);
+    
+    // Initialize moisture history
+    for (int i = 0; i < HISTORY_SIZE; i++) {
+        moistureHistory[i] = 0;
+    }
 }
 
 void updateMoistureHistory(int currentValue) {
@@ -403,13 +420,21 @@ void checkSchedules() {
         
         if (schedule.time == String(currentTime)) {
             if (schedule.type == "watering" && !waterState) {
-                waterState = true;
-                previousWaterMillis = millis();
-                digitalWrite(waterRelayPin, HIGH);
-                String message = "Smart Plant System: Starting scheduled watering";
-                Serial.println(message);
-                queueSMS(message.c_str());
-                triggeredSchedules[schedule.id] = true;  // Mark as triggered
+                // FIXED: Check soil moisture before starting scheduled watering
+                int currentMoisture = analogRead(soilMoisturePin);
+                if (currentMoisture > 600 && currentMoisture < 1000) {  // Only if dry
+                    waterState = true;
+                    previousWaterMillis = millis();
+                    digitalWrite(waterRelayPin, HIGH);
+                    String message = "Smart Plant System: Starting scheduled watering - soil is dry (" + String(currentMoisture) + ")";
+                    Serial.println(message);
+                    queueSMS(message.c_str());
+                } else {
+                    String message = "Smart Plant System: Scheduled watering skipped - soil is already humid (" + String(currentMoisture) + ")";
+                    Serial.println(message);
+                    queueSMS(message.c_str());
+                }
+                triggeredSchedules[schedule.id] = true;  // Mark as triggered regardless
             }
             else if (schedule.type == "fertilizing" && !fertilizerState) {
                 fertilizerState = true;
@@ -434,15 +459,24 @@ void loop() {
     static float humidity = 0;
     static float temperature = 0;
     if (currentMillis - lastDHTReadTime >= DHT_READ_INTERVAL) {
-        float newHumidity = dht.readHumidity();
-        float newTemperature = dht.readTemperature();
-        
-        if (!isnan(newHumidity) && !isnan(newTemperature)) {
-            humidity = newHumidity;
-            temperature = newTemperature;
-            lastDHTReadTime = currentMillis;
-        }
+    humidity = dht.readHumidity();
+    temperature = dht.readTemperature();
+
+    if (!isnan(humidity) && !isnan(temperature)) {
+        lastDHTReadTime = currentMillis;
+
+        // ✅ Print to Serial Monitor
+        Serial.print("🌡️ Temperature: ");
+        Serial.print(temperature);
+        Serial.print(" °C | 💧 Humidity: ");
+        Serial.print(humidity);
+        Serial.println(" %");
+    } else {
+        // ❌ Print error if sensor fails
+        Serial.println("❌ Failed to read from DHT sensor (NaN)");
     }
+}
+
 
     int soilMoistureValue = analogRead(soilMoisturePin);
     
@@ -452,11 +486,12 @@ void loop() {
     // Get moisture status first
     String moistureStatus = getMoistureStatus(soilMoistureValue);
 
-    // Updated moisture status output (remove percentage)
-    Serial.print("Soil Moisture Value: ");
+    // ✅ Updated moisture status output (no percentage)
+    Serial.print("🌱 Soil Moisture Value: ");
     Serial.print(soilMoistureValue);
-    Serial.print(" - Status: ");
+    Serial.print(" → Status: ");
     Serial.println(getMoistureStatus(soilMoistureValue));
+
 
     // Send data to server
     sendDataToServer(soilMoistureValue, waterState, temperature, humidity);
@@ -501,7 +536,8 @@ void loop() {
         }
     }
 
-    // Process SMS queue
+    // Add GSM status check before processing SMS queue
+    checkGSMStatus();
     processSMSQueue();
 
     // Schedule polling with proper interval checking
