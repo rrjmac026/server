@@ -160,52 +160,36 @@ function calculateStats(readings) {
 // ==========================
 app.post("/api/sensor-data", async (req, res) => {
     const startTime = Date.now();
-    const { moisture, pumpState, temperature, humidity, requestId, plantId, moistureStatus } = req.body;
+    const { plantId, moisture, pumpState, temperature, humidity } = req.body;
 
-    // Generate a requestId if none provided
-    const documentId = requestId || `auto-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-
-    // Log incoming request
-    console.log(`\n📥 Incoming data at ${new Date().toISOString()}`);
-    console.log(`RequestID: ${documentId}`);
-    console.log(`PlantId: ${plantId}`);
-    console.log(`Data: `, req.body);
-
-    // Check for duplicate request
-    if (recentRequests.has(documentId)) {
-        console.log(`⚠️ Duplicate request detected: ${documentId}`);
-        return res.status(409).json({ error: 'Duplicate request' });
+    // Validate required fields
+    if (!plantId || moisture === undefined) {
+        return res.status(400).json({ error: "Missing required fields" });
     }
 
     try {
-        // Validate required fields
-        if (!plantId || moisture === undefined) {
-            throw new Error('Missing required fields: plantId and moisture are required');
-        }
-
-        // Add document with generated ID to ensure uniqueness
-        const docRef = db.collection('sensor_data').doc(documentId);
-        await docRef.set({
+        // Add document to Firestore with server timestamp
+        const docRef = await db.collection('sensor_data').add({
             plantId,
             moisture,
             pumpState,
             temperature,
             humidity,
-            moistureStatus,
-            requestId: documentId,
+            moistureStatus: getMoistureStatus(moisture),
             timestamp: admin.firestore.FieldValue.serverTimestamp(),
-            processingTime: Date.now() - startTime
+            createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
 
-        // Record this request
-        recentRequests.set(documentId, Date.now());
-
-        console.log(`✅ Data saved successfully (${Date.now() - startTime}ms)`);
-        res.status(200).json({ success: true, id: documentId });
+        console.log(`✅ Data saved to Firestore with ID: ${docRef.id}`);
+        res.status(200).json({ 
+            success: true, 
+            id: docRef.id,
+            processingTime: Date.now() - startTime 
+        });
 
     } catch (error) {
-        console.error('❌ Error saving data:', error);
-        res.status(500).json({ error: error.message });
+        console.error('❌ Error saving to Firestore:', error);
+        res.status(500).json({ error: 'Failed to save data' });
     }
 });
 

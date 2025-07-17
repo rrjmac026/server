@@ -43,8 +43,8 @@ const char* ssid = "krezi";
 const char* password = "12345678";
 
 // Server Details
-const char* serverUrl = "http://192.168.1.8:3000/api/sensor-data";
-const char* serverUrl2 = "https://server-5527.onrender.com/api/sensor-data";
+const char* serverUrl = "http://192.168.1.8:3000/api/sensor-data";  // Local testing
+const char* serverUrl2 = "https://server-5527.onrender.com/api/sensor-data";  // Production
 const char* FIXED_PLANT_ID = "C8dA5OfZEC1EGAhkdAB4";
 
 // NTP Server settings
@@ -248,36 +248,67 @@ bool sendSMS(const char* message, const char* phoneNumber) {
     return success;
 }
 
-// Update processSMSQueue to use new error handling
-void processSMSQueue() {
-    if (gsmStatus != GSM_READY) {
-        checkGSMStatus();
+// Add these functions near the top after your #includes but before setup()
+
+// Time sync function
+bool syncTime() {
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    struct tm timeinfo;
+    int retry = 0;
+    while(!getLocalTime(&timeinfo) && retry < 5) {
+        Serial.println("⏳ Waiting for time sync...");
+        delay(1000);
+        retry++;
+    }
+    return retry < 5;
+}
+
+// Moisture status function
+String getMoistureStatus(int moisture) {
+    if (moisture >= disconnectedThreshold) return "DISCONNECTED";
+    if (moisture > dryThreshold) return "DRY";
+    if (moisture > humidThreshold) return "HUMID";
+    return "WET";
+}
+
+// Schedule fetching function
+void fetchSchedules() {
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("❌ WiFi not connected");
         return;
     }
 
-    if (smsQueue.empty() || millis() - lastSMSAttempt < SMS_RETRY_INTERVAL) {
-        return;
-    }
-
-    SMSMessage& sms = smsQueue.front();
-    if (millis() >= sms.nextAttempt) {
-        lastSMSAttempt = millis();
-        bool success = false;
-
-        for (int i = 0; i < numPhones && !success; i++) {
-            success = sendSMS(sms.message.c_str(), phoneNumbers[i]);
-            if (!success && gsmStatus == GSM_ERROR) {
-                break; // Exit if GSM module is in error state
-            }
+    HTTPClient http;
+    String url = String(serverUrl) + "/api/schedules/" + String(FIXED_PLANT_ID) + "?enabled=true";
+    
+    http.begin(url);
+    int httpCode = http.GET();
+    
+    if (httpCode == HTTP_CODE_OK) {
+        String payload = http.getString();
+        // Parse JSON and update schedules vector
+        DynamicJsonDocument doc(2048);
+        deserializeJson(doc, payload);
+        
+        schedules.clear();
+        JsonArray schedulesArray = doc["schedules"];
+        
+        for (JsonObject scheduleObj : schedulesArray) {
+            Schedule schedule;
+            schedule.id = scheduleObj["id"] | 0;
+            schedule.type = scheduleObj["type"].as<String>();
+            schedule.time = scheduleObj["time"].as<String>();
+            schedule.duration = scheduleObj["duration"] | 0;
+            schedule.enabled = scheduleObj["enabled"] | true;
+            schedules.push_back(schedule);
         }
-
-        if (success || sms.retries >= MAX_SMS_RETRIES) {
-            smsQueue.pop();
-        } else {
-            sms.retries++;
-            sms.nextAttempt = millis() + SMS_RETRY_INTERVAL;
-        }
+        
+        Serial.printf("✅ Fetched %d schedules\n", schedules.size());
+    } else {
+        Serial.printf("❌ Failed to fetch schedules: %d\n", httpCode);
     }
+    
+    http.end();
 }
 
 void setup() {
@@ -365,6 +396,11 @@ void queueSMS(const char* message) {
 }
 
 void processSMSQueue() {
+    if (gsmStatus != GSM_READY) {
+        checkGSMStatus();
+        return;
+    }
+
     if (smsQueue.empty() || millis() - lastSMSAttempt < SMS_RETRY_INTERVAL) {
         return;
     }
@@ -484,52 +520,60 @@ String getFormattedTime() {
     return String(timeStr);
 }
 
-// Modify sendDataToServer to include timing checks and logging
+// Modify sendDataToServer to try both URLs and improve error handling
 bool sendDataToServer(int moisture, bool pumpState, float temperature, float humidity) {
     if (millis() - lastSuccessfulSendTime < MIN_SEND_INTERVAL) {
         Serial.println("⏳ Skipping send - too soon since last send");
         return false;
     }
 
-    // Generate unique request ID using timestamp and random number
-    String requestId = String(millis()) + "-" + String(random(0, 1000000));
-    String moistureStatus = getMoistureStatus(moisture);
-    
+    // Basic data structure - server will handle the rest
     StaticJsonDocument<300> doc;
     doc["plantId"] = FIXED_PLANT_ID;
-    doc["requestId"] = requestId;
     doc["moisture"] = moisture;
     doc["pumpState"] = pumpState;
     doc["temperature"] = temperature;
     doc["humidity"] = humidity;
-    doc["moistureStatus"] = moistureStatus;
-    doc["timestamp"] = getFormattedTime();
 
     String jsonString;
     serializeJson(doc, jsonString);
 
-    Serial.println("📤 Sending data with ID: " + requestId);
+    Serial.println("📤 Sending data to server");
     Serial.println(jsonString);
 
     HTTPClient http;
+    bool success = false;
+
+    // Try local server first, then remote
     http.begin(serverUrl);
     http.addHeader("Content-Type", "application/json");
-    
     int httpResponseCode = http.POST(jsonString);
     
-    if (httpResponseCode == 200) {
+    if (httpResponseCode != 200) {
+        http.end();
+        // Try backup server
+        http.begin(serverUrl2);
+        http.addHeader("Content-Type", "application/json");
+        httpResponseCode = http.POST(jsonString);
+    }
+
+    success = (httpResponseCode == 200);
+    if (success) {
         lastSuccessfulSendTime = millis();
         Serial.println("✅ Data sent successfully");
-        return true;
     } else {
-        Serial.printf("❌ Error sending data: %d\n", httpResponseCode);
-        return false;
+        Serial.println("❌ Failed to send data: " + String(httpResponseCode));
     }
+
+    http.end();
+    return success;
 }
 
 // Modify the loop() function
 void loop() {
     unsigned long currentMillis = millis();
+    float temperature = 0;
+    float humidity = 0;
     
     // Pat the watchdog
     esp_task_wdt_reset();
