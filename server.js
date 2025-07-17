@@ -1,7 +1,6 @@
 const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
-const morgan = require("morgan");
 require("dotenv").config();
 const PDFDocument = require("pdfkit");
 const moment = require('moment-timezone');
@@ -25,21 +24,6 @@ const db = admin.firestore();
 app.use(cors({ origin: "*" }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(morgan(':date[iso] :method :url :status :response-time ms'));
-
-// Track recent requests to prevent duplicates
-const recentRequests = new Map();
-const REQUEST_EXPIRY = 60000; // Clear requests older than 1 minute
-
-// Cleanup old requests periodically
-setInterval(() => {
-    const cutoff = Date.now() - REQUEST_EXPIRY;
-    for (const [key, timestamp] of recentRequests) {
-        if (timestamp < cutoff) {
-            recentRequests.delete(key);
-        }
-    }
-}, 60000);
 
 // ✅ Default Route
 app.get("/", (req, res) => {
@@ -159,38 +143,30 @@ function calculateStats(readings) {
 // ✅ Receive POST Sensor Data (from ESP32)
 // ==========================
 app.post("/api/sensor-data", async (req, res) => {
-    const startTime = Date.now();
-    const { plantId, moisture, pumpState, temperature, humidity } = req.body;
+  try {
+    const data = req.body;
 
-    // Validate required fields
-    if (!plantId || moisture === undefined) {
-        return res.status(400).json({ error: "Missing required fields" });
+    // Validate incoming data
+    if (!data.plantId || data.moisture == null || 
+        data.temperature == null || data.humidity == null) {
+      return res.status(400).json({ error: "Incomplete sensor data" });
     }
 
-    try {
-        // Add document to Firestore with server timestamp
-        const docRef = await db.collection('sensor_data').add({
-            plantId,
-            moisture,
-            pumpState,
-            temperature,
-            humidity,
-            moistureStatus: getMoistureStatus(moisture),
-            timestamp: admin.firestore.FieldValue.serverTimestamp(),
-            createdAt: admin.firestore.FieldValue.serverTimestamp()
-        });
+    // Round values to 2 decimal places to save space
+    data.temperature = Math.round(data.temperature * 100) / 100;
+    data.humidity = Math.round(data.humidity * 100) / 100;
+    data.moistureStatus = getMoistureStatus(data.moisture);
 
-        console.log(`✅ Data saved to Firestore with ID: ${docRef.id}`);
-        res.status(200).json({ 
-            success: true, 
-            id: docRef.id,
-            processingTime: Date.now() - startTime 
-        });
-
-    } catch (error) {
-        console.error('❌ Error saving to Firestore:', error);
-        res.status(500).json({ error: 'Failed to save data' });
-    }
+    // Save to Firestore with current timestamp
+    const savedDoc = await saveSensorData(data);
+    res.status(201).json({ 
+        message: "Sensor data saved", 
+        id: savedDoc.id 
+    });
+  } catch (error) {
+    console.error("❌ Error saving sensor data:", error.message);
+    res.status(500).json({ error: "Failed to save sensor data" });
+  }
 });
 
 // ==========================
@@ -670,18 +646,6 @@ async function cleanupOldData() {
 
 // Add cleanup schedule (runs daily)
 setInterval(cleanupOldData, 24 * 60 * 60 * 1000);
-
-// Add a diagnostic endpoint
-app.get('/diagnostic', (req, res) => {
-    res.json({
-        uptime: process.uptime(),
-        timestamp: new Date().toISOString(),
-        recentRequestsCount: recentRequests.size,
-        processId: process.pid,
-        nodeVersion: process.version,
-        memoryUsage: process.memoryUsage()
-    });
-});
 
 // ✅ Start the Server
 app.listen(port, () => {
