@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
+const morgan = require("morgan");
 require("dotenv").config();
 const PDFDocument = require("pdfkit");
 const moment = require('moment-timezone');
@@ -24,6 +25,21 @@ const db = admin.firestore();
 app.use(cors({ origin: "*" }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(morgan(':date[iso] :method :url :status :response-time ms'));
+
+// Track recent requests to prevent duplicates
+const recentRequests = new Map();
+const REQUEST_EXPIRY = 60000; // Clear requests older than 1 minute
+
+// Cleanup old requests periodically
+setInterval(() => {
+    const cutoff = Date.now() - REQUEST_EXPIRY;
+    for (const [key, timestamp] of recentRequests) {
+        if (timestamp < cutoff) {
+            recentRequests.delete(key);
+        }
+    }
+}, 60000);
 
 // ✅ Default Route
 app.get("/", (req, res) => {
@@ -143,23 +159,45 @@ function calculateStats(readings) {
 // ✅ Receive POST Sensor Data (from ESP32)
 // ==========================
 app.post("/api/sensor-data", async (req, res) => {
+  const startTime = Date.now();
+  const { moisture, pumpState, temperature, humidity, requestId, deviceId, timestamp } = req.body;
+
+  // Log incoming request
+  console.log(`\n📥 Incoming data at ${new Date().toISOString()}`);
+  console.log(`RequestID: ${requestId}`);
+  console.log(`DeviceID: ${deviceId}`);
+  console.log(`Data: `, req.body);
+
+  // Check for duplicate request
+  if (recentRequests.has(requestId)) {
+      console.log(`⚠️ Duplicate request detected: ${requestId}`);
+      return res.status(409).json({ error: 'Duplicate request' });
+  }
+
   try {
-    const data = req.body;
+      // Add document with requestId as the document ID to ensure uniqueness
+      const docRef = admin.firestore().collection('readings').doc(requestId);
+      await docRef.set({
+          moisture,
+          pumpState,
+          temperature,
+          humidity,
+          deviceId,
+          timestamp,
+          requestId,
+          serverTimestamp: admin.firestore.FieldValue.serverTimestamp(),
+          processingTime: Date.now() - startTime
+      });
 
-    // Optional: Validate incoming data
-    if (!data.plantId || data.moisture == null || data.temperature == null || data.humidity == null) {
-      return res.status(400).json({ error: "Incomplete sensor data" });
-    }
+      // Record this request
+      recentRequests.set(requestId, Date.now());
 
-    // Determine moisture status
-    data.moistureStatus = getMoistureStatus(data.moisture);
+      console.log(`✅ Data saved successfully (${Date.now() - startTime}ms)`);
+      res.status(200).json({ success: true });
 
-    // Save to Firestore
-    const savedDoc = await saveSensorData(data);
-    res.status(201).json({ message: "Sensor data saved", id: savedDoc.id });
   } catch (error) {
-    console.error("❌ Error saving sensor data:", error.message);
-    res.status(500).json({ error: "Failed to save sensor data" });
+      console.error('❌ Error saving data:', error);
+      res.status(500).json({ error: 'Failed to save data' });
   }
 });
 
@@ -613,6 +651,45 @@ app.delete('/api/schedules/:scheduleId', async (req, res) => {
 
 // Note: The polling endpoint for schedules has been merged with the main GET endpoint
 // Use /api/schedules/:plantId?enabled=true to get only enabled schedules
+
+// Add after other helper functions
+async function cleanupOldData() {
+    // Keep data for last 30 days
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - 30);
+    
+    try {
+        const oldData = await db.collection("sensor_data")
+            .where("timestamp", "<", cutoffDate)
+            .get();
+
+        console.log(`🧹 Cleaning up ${oldData.docs.length} old records`);
+        
+        const batch = db.batch();
+        oldData.docs.forEach((doc) => {
+            batch.delete(doc.ref);
+        });
+        
+        await batch.commit();
+    } catch (error) {
+        console.error("❌ Cleanup error:", error);
+    }
+}
+
+// Add cleanup schedule (runs daily)
+setInterval(cleanupOldData, 24 * 60 * 60 * 1000);
+
+// Add a diagnostic endpoint
+app.get('/diagnostic', (req, res) => {
+    res.json({
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString(),
+        recentRequestsCount: recentRequests.size,
+        processId: process.pid,
+        nodeVersion: process.version,
+        memoryUsage: process.memoryUsage()
+    });
+});
 
 // ✅ Start the Server
 app.listen(port, () => {

@@ -449,34 +449,124 @@ void checkSchedules() {
     }
 }
 
+// Update constants after other constants
+const unsigned long SENSOR_READ_INTERVAL = 30000;  // 30 seconds
+const unsigned long DATA_SEND_INTERVAL = 30000;    // 30 seconds
+unsigned long lastSensorReadTime = 0;
+unsigned long lastDataSendTime = 0;
+
+// Add these variables for data averaging
+float temperatureSum = 0;
+float humiditySum = 0;
+int moistureSum = 0;
+int readingCount = 0;
+
+// Add this function before loop()
+void resetAggregatedData() {
+    temperatureSum = 0;
+    humiditySum = 0;
+    moistureSum = 0;
+    readingCount = 0;
+}
+
+// Add these constants near other timing constants
+const unsigned long MIN_SEND_INTERVAL = 30000;  // Enforce minimum 30s between sends
+unsigned long lastSuccessfulSendTime = 0;  // Track last successful send
+
+// Add this function before loop()
+String getFormattedTime() {
+    struct tm timeinfo;
+    if(!getLocalTime(&timeinfo)) {
+        return "Time not set";
+    }
+    char timeStr[30];
+    strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", &timeinfo);
+    return String(timeStr);
+}
+
+// Modify sendDataToServer to include timing checks and logging
+bool sendDataToServer(int moisture, bool pumpState, float temperature, float humidity) {
+    if (millis() - lastSuccessfulSendTime < MIN_SEND_INTERVAL) {
+        Serial.println("⏳ Skipping send - too soon since last send");
+        return false;
+    }
+
+    // Generate unique request ID
+    String requestId = String(millis()) + "-" + String(random(0, 1000000));
+    
+    StaticJsonDocument<200> doc;
+    doc["moisture"] = moisture;
+    doc["pumpState"] = pumpState;
+    doc["temperature"] = temperature;
+    doc["humidity"] = humidity;
+    doc["timestamp"] = getFormattedTime();
+    doc["requestId"] = requestId;
+    doc["deviceId"] = FIXED_PLANT_ID;
+
+    String jsonString;
+    serializeJson(doc, jsonString);
+
+    Serial.println("📤 Sending data with ID: " + requestId);
+    Serial.println(jsonString);
+
+    HTTPClient http;
+    http.begin(serverUrl);
+    http.addHeader("Content-Type", "application/json");
+    
+    int httpResponseCode = http.POST(jsonString);
+    
+    if (httpResponseCode == 200) {
+        lastSuccessfulSendTime = millis();
+        Serial.println("✅ Data sent successfully");
+        return true;
+    } else {
+        Serial.printf("❌ Error sending data: %d\n", httpResponseCode);
+        return false;
+    }
+}
+
+// Modify the loop() function
 void loop() {
     unsigned long currentMillis = millis();
     
     // Pat the watchdog
     esp_task_wdt_reset();
     
-    // Throttled DHT reading
-    static float humidity = 0;
-    static float temperature = 0;
-    if (currentMillis - lastDHTReadTime >= DHT_READ_INTERVAL) {
-    humidity = dht.readHumidity();
-    temperature = dht.readTemperature();
+    static bool readyToSend = false;
+    
+    // Take sensor readings every 30 seconds
+    if (currentMillis - lastSensorReadTime >= SENSOR_READ_INTERVAL) {
+        // Read DHT sensor
+        float humidity = dht.readHumidity();
+        float temperature = dht.readTemperature();
+        int soilMoistureValue = analogRead(soilMoisturePin);
 
-    if (!isnan(humidity) && !isnan(temperature)) {
-        lastDHTReadTime = currentMillis;
+        if (!isnan(humidity) && !isnan(temperature)) {
+            temperatureSum += temperature;
+            humiditySum += humidity;
+            moistureSum += soilMoistureValue;
+            readingCount++;
+            readyToSend = true;  // Mark that we have new data to send
 
-        // ✅ Print to Serial Monitor
-        Serial.print("🌡️ Temperature: ");
-        Serial.print(temperature);
-        Serial.print(" °C | 💧 Humidity: ");
-        Serial.print(humidity);
-        Serial.println(" %");
-    } else {
-        // ❌ Print error if sensor fails
-        Serial.println("❌ Failed to read from DHT sensor (NaN)");
+            Serial.printf("📊 Reading #%d - T: %.1f°C, H: %.1f%%, M: %d\n", 
+                        readingCount, temperature, humidity, soilMoistureValue);
+        }
+
+        lastSensorReadTime = currentMillis;
     }
-}
 
+    // Only attempt to send if we have readings and enough time has passed
+    if (readyToSend && currentMillis - lastDataSendTime >= DATA_SEND_INTERVAL && readingCount > 0) {
+        float avgTemperature = temperatureSum / readingCount;
+        float avgHumidity = humiditySum / readingCount;
+        int avgMoisture = moistureSum / readingCount;
+
+        if (sendDataToServer(avgMoisture, waterState, avgTemperature, avgHumidity)) {
+            resetAggregatedData();
+            lastDataSendTime = currentMillis;
+            readyToSend = false;
+        }
+    }
 
     int soilMoistureValue = analogRead(soilMoisturePin);
     
