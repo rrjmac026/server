@@ -146,22 +146,40 @@ app.post("/api/sensor-data", async (req, res) => {
   try {
     const data = req.body;
 
-    // Validate incoming data
-    if (!data.plantId || data.moisture == null || 
-        data.temperature == null || data.humidity == null) {
-      return res.status(400).json({ error: "Incomplete sensor data" });
+    // Enhanced validation
+    const requiredFields = ['plantId', 'moisture', 'temperature', 'humidity'];
+    const missingFields = requiredFields.filter(field => data[field] == null);
+    
+    if (missingFields.length > 0) {
+      return res.status(400).json({ 
+        error: "Incomplete sensor data", 
+        missingFields 
+      });
     }
 
-    // Round values to 2 decimal places to save space
+    // Round values
     data.temperature = Math.round(data.temperature * 100) / 100;
     data.humidity = Math.round(data.humidity * 100) / 100;
     data.moistureStatus = getMoistureStatus(data.moisture);
 
-    // Save to Firestore with current timestamp
+    // Add timestamps
+    data.timestamp = admin.firestore.Timestamp.now();
+    data.localTime = moment().tz('Asia/Manila').format();
+
+    // Save to Firestore
     const savedDoc = await saveSensorData(data);
+
+    // Check for alerts
+    let alerts = [];
+    if (data.moisture >= 1000) alerts.push("Soil moisture sensor may be disconnected");
+    if (data.temperature > 35) alerts.push("High temperature detected");
+    if (data.humidity > 90) alerts.push("High humidity detected");
+
     res.status(201).json({ 
-        message: "Sensor data saved", 
-        id: savedDoc.id 
+      message: "Sensor data saved", 
+      id: savedDoc.id,
+      alerts,
+      timestamp: data.localTime
     });
   } catch (error) {
     console.error("❌ Error saving sensor data:", error.message);
