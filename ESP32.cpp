@@ -19,9 +19,9 @@ const int DHTPIN = 15;          // DHT sensor pin
 DHT dht(DHTPIN, DHTTYPE);
 
 // Threshold ranges (based on 0–1023 scale)
-const int dryThreshold = 600;
-const int humidThreshold = 370;
-const int disconnectedThreshold = 1000;
+const int dryThreshold = 60;      // 60% dryness threshold
+const int humidThreshold = 35;    // 35% dryness threshold
+const int disconnectedThreshold = 95;  // 95% indicates likely disconnected
 
 unsigned long previousWaterMillis = 0;
 const unsigned long waterOnDuration = 30000;  // 30 seconds
@@ -313,7 +313,7 @@ void sendDataToServer(int moisture, bool waterState, float temperature, float hu
     // Create JSON document
     StaticJsonDocument<200> doc;
     doc["plantId"] = FIXED_PLANT_ID;
-    doc["moisture"] = moisture;
+    doc["moisture"] = convertToMoisturePercent(moisture);  // Send percentage instead of raw value
     doc["temperature"] = temperature;
     doc["humidity"] = humidity;
     doc["waterState"] = waterState;
@@ -419,12 +419,19 @@ void fetchSchedules() {
     http.end();
 }
 
-// Moisture status determination function
-String getMoistureStatus(int moisture) {
-    if (moisture >= 1000) return "SENSOR ERROR";
-    if (moisture > 600) return "DRY";
-    if (moisture > 370) return "HUMID";
-    return "WET";
+// Helper functions
+int convertToMoisturePercent(int rawValue) {
+    // Invert and convert to percentage (1023 = 0%, 0 = 100%)
+    // Constrain raw value to valid range first
+    rawValue = constrain(rawValue, 0, 1023);
+    return map(rawValue, 0, 1023, 100, 0);
+}
+
+String getMoistureStatus(int moisturePercent) {
+    if (moisturePercent <= 5) return "SENSOR ERROR";
+    if (moisturePercent < 40) return "WET";
+    if (moisturePercent < 65) return "HUMID";
+    return "DRY";
 }
 
 // Add new constant for watchdog control
@@ -547,21 +554,23 @@ void checkSchedules() {
         
         if (schedule.time == String(currentTime)) {
             if (schedule.type == "watering" && !waterState) {
-                // FIXED: Check soil moisture before starting scheduled watering
                 int currentMoisture = analogRead(soilMoisturePin);
-                if (currentMoisture > 600 && currentMoisture < 1000) {  // Only if dry
+                int moisturePercent = convertToMoisturePercent(currentMoisture);
+                if (moisturePercent > dryThreshold && moisturePercent < disconnectedThreshold) {
                     waterState = true;
                     previousWaterMillis = millis();
                     digitalWrite(waterRelayPin, HIGH);
-                    String message = "Smart Plant System: Starting scheduled watering - soil is dry (" + String(currentMoisture) + ")";
+                    String message = "Smart Plant System: Starting scheduled watering - soil is dry (" + 
+                                   String(moisturePercent) + "%)";
                     Serial.println(message);
                     queueSMS(message.c_str());
                 } else {
-                    String message = "Smart Plant System: Scheduled watering skipped - soil is already humid (" + String(currentMoisture) + ")";
+                    String message = "Smart Plant System: Scheduled watering skipped - soil is already humid (" + 
+                                   String(moisturePercent) + "%)";
                     Serial.println(message);
                     queueSMS(message.c_str());
                 }
-                triggeredSchedules[schedule.id] = true;  // Mark as triggered regardless
+                triggeredSchedules[schedule.id] = true;
             }
             else if (schedule.type == "fertilizing" && !fertilizerState) {
                 fertilizerState = true;
@@ -604,6 +613,7 @@ unsigned long lastReadTime = 0;
 
 void loop() {
     unsigned long currentMillis = millis();
+    static int moisturePercent = 0;  // Add this line to declare moisturePercent
     
     // WiFi check
     if (WiFi.status() != WL_CONNECTED) {
@@ -621,14 +631,15 @@ void loop() {
         humidity = dht.readHumidity();
         temperature = dht.readTemperature();
         
-        // Read soil moisture
+        // Read soil moisture and convert to percentage
         soilMoistureValue = analogRead(soilMoisturePin);
-        
-        updateMoistureHistory(soilMoistureValue);
+        moisturePercent = convertToMoisturePercent(soilMoistureValue);
+
+        updateMoistureHistory(moisturePercent);
         rapidDrying = detectRapidDrying();
         
         // Update status and display
-        moistureStatus = getMoistureStatus(soilMoistureValue);
+        moistureStatus = getMoistureStatus(moisturePercent);
         
         // Print readings
         char msgBuffer[100];
@@ -636,9 +647,9 @@ void loop() {
                 temperature, humidity);
         Serial.println(msgBuffer);
         
-        Serial.print("🌱 Soil Moisture Value: ");
-        Serial.print(soilMoistureValue);
-        Serial.print(" → Status: ");
+        Serial.print("🌱 Soil Moisture: ");
+        Serial.print(moisturePercent);
+        Serial.print("% → Status: ");
         Serial.println(moistureStatus);
         
         lastReadTime = currentMillis;
@@ -655,13 +666,13 @@ void loop() {
     // Enhanced water pump control logic
     if (waterState) {
         if (currentMillis - previousWaterMillis >= waterOnDuration || 
-            soilMoistureValue <= 600 || soilMoistureValue >= 1000) {
+            moisturePercent <= dryThreshold || moisturePercent >= disconnectedThreshold) {
             waterState = false;
             digitalWrite(waterRelayPin, LOW);
             String message;
-            if (soilMoistureValue >= 1000) {
+            if (moisturePercent >= disconnectedThreshold) {
                 message = "Smart Plant System: Watering stopped. Reason: Sensor disconnected or not in soil.";
-            } else if (soilMoistureValue <= 600) {
+            } else if (moisturePercent <= dryThreshold) {
                 message = "Smart Plant System: Watering stopped. Soil is now humid/wet.";
             } else {
                 message = "Smart Plant System: Watering cycle completed.";
@@ -671,7 +682,7 @@ void loop() {
         }
     } else {
         // Only start watering if soil is dry
-        if (soilMoistureValue > 600 && soilMoistureValue < 1000) {  // DRY condition only
+        if (moisturePercent > dryThreshold && moisturePercent < disconnectedThreshold) {  // DRY condition only
             waterState = true;
             previousWaterMillis = currentMillis;
             digitalWrite(waterRelayPin, HIGH);
