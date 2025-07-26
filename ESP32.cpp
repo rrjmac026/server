@@ -8,6 +8,7 @@
 #include <map>
 #include <esp_task_wdt.h>
 #include <WiFiClientSecure.h>
+#include <esp_log.h>  // Add this with other includes
 
 const int waterRelayPin = 26;
 const int fertilizerRelayPin = 23;
@@ -248,13 +249,39 @@ bool sendSMS(const char* message, const char* phoneNumber) {
     return success;
 }
 
-float temperature = 0;
-float humidity = 0;
+// Update processSMSQueue to use new error handling
+void processSMSQueue() {
+    if (gsmStatus != GSM_READY) {
+        checkGSMStatus();
+        return;
+    }
 
-bool syncTime();
-String getMoistureStatus(int moisture);
-void fetchSchedules();
+    if (smsQueue.empty() || millis() - lastSMSAttempt < SMS_RETRY_INTERVAL) {
+        return;
+    }
 
+    SMSMessage& sms = smsQueue.front();
+    if (millis() >= sms.nextAttempt) {
+        lastSMSAttempt = millis();
+        bool success = false;
+
+        for (int i = 0; i < numPhones && !success; i++) {
+            success = sendSMS(sms.message.c_str(), phoneNumbers[i]);
+            if (!success && gsmStatus == GSM_ERROR) {
+                break; // Exit if GSM module is in error state
+            }
+        }
+
+        if (success || sms.retries >= MAX_SMS_RETRIES) {
+            smsQueue.pop();
+        } else {
+            sms.retries++;
+            sms.nextAttempt = millis() + SMS_RETRY_INTERVAL;
+        }
+    }
+}
+
+// Time sync function
 bool syncTime() {
     int retries = 0;
     const int maxRetries = 5;
@@ -264,25 +291,97 @@ bool syncTime() {
         
         struct tm timeinfo;
         if (getLocalTime(&timeinfo)) {
-            Serial.println("✅ NTP Time Sync Success");
+            Serial.println("⏰ Time synchronized");
             return true;
         }
         
         retries++;
-        Serial.println("⏳ NTP sync attempt " + String(retries) + " failed");
-        delay(1000);
+        Serial.println("Retrying time sync...");
+        delay(2000);
     }
     
     return false;
 }
 
-String getMoistureStatus(int moisture) {
-    if (moisture >= 1000) return "DISCONNECTED";
-    if (moisture > 600) return "DRY";
-    if (moisture > 370) return "HUMID";
-    return "WET";
+// Update the server communication function
+void sendDataToServer(int moisture, bool waterState, float temperature, float humidity) {
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("❌ WiFi not connected");
+        return;
+    }
+
+    // Create JSON document
+    StaticJsonDocument<200> doc;
+    doc["plantId"] = FIXED_PLANT_ID;
+    doc["moisture"] = moisture;
+    doc["temperature"] = temperature;
+    doc["humidity"] = humidity;
+    doc["waterState"] = waterState;
+    doc["fertilizerState"] = fertilizerState;
+
+    String jsonString;
+    serializeJson(doc, jsonString);
+
+    // Setup HTTPS client
+    WiFiClientSecure *client = new WiFiClientSecure;
+    if(!client) {
+        Serial.println("❌ Failed to create HTTPS client");
+        return;
+    }
+
+    client->setInsecure(); // Skip certificate verification
+    HTTPClient https;
+    
+    // Set longer timeout and retry mechanism
+    https.setTimeout(15000); // 15 seconds timeout
+    
+    // Try to connect to Render server
+    Serial.println("📡 Sending data to Render...");
+    https.begin(*client, serverUrl2);
+    https.addHeader("Content-Type", "application/json");
+    
+    // Send with retries
+    int retries = 0;
+    int httpResponseCode;
+    bool success = false;
+    
+    while (retries < 3 && !success) {
+        httpResponseCode = https.POST(jsonString);
+        
+        if (httpResponseCode > 0) {
+            String response = https.getString();
+            Serial.println("✅ Server response code: " + String(httpResponseCode));
+            Serial.println("📥 Response: " + response);
+            success = true;
+        } else {
+            retries++;
+            Serial.println("❌ Error on sending POST: " + https.errorToString(httpResponseCode));
+            if (retries < 3) {
+                Serial.println("🔄 Retrying... Attempt " + String(retries + 1));
+                delay(1000);
+            }
+        }
+    }
+
+    https.end();
+    delete client;
+
+    // Try local server only if remote failed
+    if (!success) {
+        HTTPClient http;
+        http.begin(serverUrl);
+        http.addHeader("Content-Type", "application/json");
+        
+        httpResponseCode = http.POST(jsonString);
+        if (httpResponseCode > 0) {
+            String response = http.getString();
+            Serial.println("✅ Local server response: " + response);
+        }
+        http.end();
+    }
 }
 
+// Schedule fetching function
 void fetchSchedules() {
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("❌ WiFi not connected");
@@ -290,46 +389,57 @@ void fetchSchedules() {
     }
 
     HTTPClient http;
-    String url = String(serverUrl) + "/schedules/" + String(FIXED_PLANT_ID) + "?enabled=true";
+    String url = String(serverUrl) + "/schedules/" + FIXED_PLANT_ID + "?enabled=true";
     http.begin(url);
-    
-    int httpCode = http.GET();
-    
-    if (httpCode == HTTP_CODE_OK) {
-        String payload = http.getString();
-        StaticJsonDocument<1024> doc;
-        
-        DeserializationError error = deserializeJson(doc, payload);
-        if (error) {
-            Serial.println("❌ JSON parsing failed");
-            http.end();
-            return;
-        }
 
-        // Clear existing schedules
-        schedules.clear();
+    int httpCode = http.GET();
+    if (httpCode > 0) {
+        String payload = http.getString();
         
-        JsonArray schedulesArray = doc["schedules"];
-        for (JsonObject scheduleObj : schedulesArray) {
-            Schedule schedule;
-            schedule.id = scheduleObj["id"].as<int>();
-            schedule.type = scheduleObj["type"].as<String>();
-            schedule.time = scheduleObj["time"].as<String>();
-            schedule.duration = scheduleObj["duration"].as<int>();
-            schedule.enabled = scheduleObj["enabled"].as<bool>();
+        // Parse JSON response
+        StaticJsonDocument<1024> doc;
+        DeserializationError error = deserializeJson(doc, payload);
+        
+        if (!error) {
+            schedules.clear();
+            JsonArray schedulesArray = doc["schedules"];
             
-            schedules.push_back(schedule);
+            for (JsonObject scheduleObj : schedulesArray) {
+                Schedule schedule;
+                schedule.id = scheduleObj["id"].as<int>();
+                schedule.type = scheduleObj["type"].as<String>();
+                schedule.time = scheduleObj["time"].as<String>();
+                schedule.duration = scheduleObj["duration"].as<int>();
+                schedule.enabled = scheduleObj["enabled"].as<bool>();
+                schedules.push_back(schedule);
+            }
         }
-        
-        Serial.println("✅ Schedules updated: " + String(schedules.size()) + " active schedules");
-    } else {
-        Serial.println("❌ Failed to fetch schedules: " + String(httpCode));
     }
     
     http.end();
 }
 
+// Moisture status determination function
+String getMoistureStatus(int moisture) {
+    if (moisture >= 1000) return "SENSOR ERROR";
+    if (moisture > 600) return "DRY";
+    if (moisture > 370) return "HUMID";
+    return "WET";
+}
+
+// Add new constant for watchdog control
+const bool USE_WATCHDOG = true;
+
 void setup() {
+    // Add these lines at the very start of setup()
+    esp_log_level_set("*", ESP_LOG_NONE);  // Disable all ESP32 debug output
+    delay(100);  // Wait for any pending messages
+    Serial.begin(115200);
+    Serial.println();  // Clear line
+    Serial.println("🌱 Smart Plant System Starting...");
+
+    // Continue with the rest of the setup code
+    // ...existing code...
     analogReadResolution(10); // Use 0–1023 range
     pinMode(waterRelayPin, OUTPUT);
     digitalWrite(waterRelayPin, LOW); // Start with pump OFF
@@ -374,16 +484,16 @@ void setup() {
     }
     Serial.println("GSM Module Ready");
 
-    // Initialize watchdog
-    esp_task_wdt_config_t wdt_config = {
-      .timeout_ms = 30000,                      // 30 seconds
-      .idle_core_mask = (1 << portNUM_PROCESSORS) - 1,  // Both cores
-      .trigger_panic = true                     // Reset on WDT timeout
-    };
-
-    esp_task_wdt_init(&wdt_config);
- // 30 second timeout
-    esp_task_wdt_add(NULL);
+    // Modify watchdog initialization to be conditional
+    if (USE_WATCHDOG) {
+        esp_task_wdt_config_t wdt_config = {
+            .timeout_ms = 60000,                   // Increase to 60 seconds
+            .idle_core_mask = (1 << portNUM_PROCESSORS) - 1,
+            .trigger_panic = true
+        };
+        esp_task_wdt_init(&wdt_config);
+        esp_task_wdt_add(NULL);
+    }
     
     // Initialize moisture history
     for (int i = 0; i < HISTORY_SIZE; i++) {
@@ -411,38 +521,6 @@ void queueSMS(const char* message) {
     sms.retries = 0;
     sms.nextAttempt = millis();
     smsQueue.push(sms);
-}
-
-void processSMSQueue() {
-    if (smsQueue.empty() || millis() - lastSMSAttempt < SMS_RETRY_INTERVAL) {
-        return;
-    }
-
-    SMSMessage& sms = smsQueue.front();
-    if (millis() >= sms.nextAttempt) {
-        lastSMSAttempt = millis();
-        
-        bool success = false;
-        for (int i = 0; i < numPhones && !success; i++) {
-            sim900.print("AT+CMGS=\"");
-            sim900.print(phoneNumbers[i]);
-            sim900.println("\"");
-            delay(100);  // Short delay needed for GSM module
-
-            sim900.print(sms.message);
-            sim900.write(26);
-            
-            String response = readGSMResponse();
-            success = (response.indexOf("OK") >= 0 && response.indexOf("+CMGS") >= 0);
-        }
-
-        if (success || sms.retries >= MAX_SMS_RETRIES) {
-            smsQueue.pop();
-        } else {
-            sms.retries++;
-            sms.nextAttempt = millis() + SMS_RETRY_INTERVAL;
-        }
-    }
 }
 
 void checkSchedules() {
@@ -498,142 +576,81 @@ void checkSchedules() {
     }
 }
 
-// Update constants after other constants
-const unsigned long SENSOR_READ_INTERVAL = 30000;  // 30 seconds
-const unsigned long DATA_SEND_INTERVAL = 30000;    // 30 seconds
-unsigned long lastSensorReadTime = 0;
-unsigned long lastDataSendTime = 0;
-
-// Add these variables for data averaging
-float temperatureSum = 0;
-float humiditySum = 0;
-int moistureSum = 0;
-int readingCount = 0;
-
-// Add this function before loop()
-void resetAggregatedData() {
-    temperatureSum = 0;
-    humiditySum = 0;
-    moistureSum = 0;
-    readingCount = 0;
-}
-
-// Add these constants near other timing constants
-const unsigned long MIN_SEND_INTERVAL = 30000;  // Enforce minimum 30s between sends
-unsigned long lastSuccessfulSendTime = 0;  // Track last successful send
-
-// Add this function before loop()
-String getFormattedTime() {
-    struct tm timeinfo;
-    if(!getLocalTime(&timeinfo)) {
-        return "Time not set";
-    }
-    char timeStr[30];
-    strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", &timeinfo);
-    return String(timeStr);
-}
-
-// Modify sendDataToServer to include timing checks and logging
-bool sendDataToServer(int moisture, bool pumpState, float temperature, float humidity) {
-    if (millis() - lastSuccessfulSendTime < MIN_SEND_INTERVAL) {
-        Serial.println("⏳ Skipping send - too soon since last send");
-        return false;
-    }
-
-    // Generate unique request ID
-    String requestId = String(millis()) + "-" + String(random(0, 1000000));
-    
-    StaticJsonDocument<200> doc;
-    doc["moisture"] = moisture;
-    doc["pumpState"] = pumpState;
-    doc["temperature"] = temperature;
-    doc["humidity"] = humidity;
-    doc["timestamp"] = getFormattedTime();
-    doc["requestId"] = requestId;
-    doc["deviceId"] = FIXED_PLANT_ID;
-
-    String jsonString;
-    serializeJson(doc, jsonString);
-
-    Serial.println("📤 Sending data with ID: " + requestId);
-    Serial.println(jsonString);
-
-    HTTPClient http;
-    http.begin(serverUrl);
-    http.addHeader("Content-Type", "application/json");
-    
-    int httpResponseCode = http.POST(jsonString);
-    
-    if (httpResponseCode == 200) {
-        lastSuccessfulSendTime = millis();
-        Serial.println("✅ Data sent successfully");
-        return true;
-    } else {
-        Serial.printf("❌ Error sending data: %d\n", httpResponseCode);
-        return false;
+// Add watchdog control functions before loop()
+void pauseWatchdog() {
+    if (USE_WATCHDOG) {
+        esp_task_wdt_delete(NULL);
     }
 }
 
-// Modify the loop() function
+void resumeWatchdog() {
+    if (USE_WATCHDOG) {
+        esp_task_wdt_add(NULL);
+        esp_task_wdt_reset();
+    }
+}
+
+// Add these with other global variables at the top
+float humidity = 0;
+float temperature = 0;
+int soilMoistureValue = 0;
+String moistureStatus;
+unsigned long lastHeapCheck = 0;
+
+const unsigned long SEND_INTERVAL = 30000;  // Send data every 30 seconds
+const unsigned long READ_INTERVAL = 30000;  // Read sensors every 30 seconds
+unsigned long lastSendTime = 0;
+unsigned long lastReadTime = 0;
+
 void loop() {
     unsigned long currentMillis = millis();
     
-    // Pat the watchdog
-    esp_task_wdt_reset();
+    // WiFi check
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("📡 Reconnecting WiFi...");
+        WiFi.reconnect();
+        delay(5000);
+        return;
+    }
+
+    pauseWatchdog();
     
-    static bool readyToSend = false;
-    
-    // Take sensor readings every 30 seconds
-    if (currentMillis - lastSensorReadTime >= SENSOR_READ_INTERVAL) {
+    // Read sensors every 30 seconds
+    if (currentMillis - lastReadTime >= READ_INTERVAL) {
         // Read DHT sensor
-        float humidity = dht.readHumidity();
-        float temperature = dht.readTemperature();
-        int soilMoistureValue = analogRead(soilMoisturePin);
-
-        if (!isnan(humidity) && !isnan(temperature)) {
-            temperatureSum += temperature;
-            humiditySum += humidity;
-            moistureSum += soilMoistureValue;
-            readingCount++;
-            readyToSend = true;  // Mark that we have new data to send
-
-            Serial.printf("📊 Reading #%d - T: %.1f°C, H: %.1f%%, M: %d\n", 
-                        readingCount, temperature, humidity, soilMoistureValue);
-        }
-
-        lastSensorReadTime = currentMillis;
+        humidity = dht.readHumidity();
+        temperature = dht.readTemperature();
+        
+        // Read soil moisture
+        soilMoistureValue = analogRead(soilMoisturePin);
+        
+        updateMoistureHistory(soilMoistureValue);
+        rapidDrying = detectRapidDrying();
+        
+        // Update status and display
+        moistureStatus = getMoistureStatus(soilMoistureValue);
+        
+        // Print readings
+        char msgBuffer[100];
+        snprintf(msgBuffer, sizeof(msgBuffer), "🌡️ Temperature: %.1f °C | 💧 Humidity: %.1f %%", 
+                temperature, humidity);
+        Serial.println(msgBuffer);
+        
+        Serial.print("🌱 Soil Moisture Value: ");
+        Serial.print(soilMoistureValue);
+        Serial.print(" → Status: ");
+        Serial.println(moistureStatus);
+        
+        lastReadTime = currentMillis;
     }
 
-    // Only attempt to send if we have readings and enough time has passed
-    if (readyToSend && currentMillis - lastDataSendTime >= DATA_SEND_INTERVAL && readingCount > 0) {
-        float avgTemperature = temperatureSum / readingCount;
-        float avgHumidity = humiditySum / readingCount;
-        int avgMoisture = moistureSum / readingCount;
-
-        if (sendDataToServer(avgMoisture, waterState, avgTemperature, avgHumidity)) {
-            resetAggregatedData();
-            lastDataSendTime = currentMillis;
-            readyToSend = false;
-        }
+    // Send data every 30 seconds
+    if (currentMillis - lastSendTime >= SEND_INTERVAL) {
+        sendDataToServer(soilMoistureValue, waterState, temperature, humidity);
+        lastSendTime = currentMillis;
     }
 
-    int soilMoistureValue = analogRead(soilMoisturePin);
-    
-    updateMoistureHistory(soilMoistureValue);
-    rapidDrying = detectRapidDrying();
-
-    // Get moisture status first
-    String moistureStatus = getMoistureStatus(soilMoistureValue);
-
-    // ✅ Updated moisture status output (no percentage)
-    Serial.print("🌱 Soil Moisture Value: ");
-    Serial.print(soilMoistureValue);
-    Serial.print(" → Status: ");
-    Serial.println(getMoistureStatus(soilMoistureValue));
-
-
-    // Send data to server
-    sendDataToServer(soilMoistureValue, waterState, temperature, humidity);
+    resumeWatchdog();
 
     // Enhanced water pump control logic
     if (waterState) {
@@ -653,7 +670,7 @@ void loop() {
             queueSMS(message.c_str());
         }
     } else {
-        // Only start watering if soil is dry or triggered by schedule (checkSchedules handles scheduling)
+        // Only start watering if soil is dry
         if (soilMoistureValue > 600 && soilMoistureValue < 1000) {  // DRY condition only
             waterState = true;
             previousWaterMillis = currentMillis;
@@ -678,7 +695,7 @@ void loop() {
     // Add GSM status check before processing SMS queue
     checkGSMStatus();
     processSMSQueue();
-
+    
     // Schedule polling with proper interval checking
     if (currentMillis - lastPollTime >= POLLING_INTERVAL) {
         fetchSchedules();
@@ -686,5 +703,12 @@ void loop() {
     }
     
     checkSchedules();
-    delay(500);
+    
+    // Heap check
+    if (currentMillis - lastHeapCheck >= 30000) {
+        Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
+        lastHeapCheck = currentMillis;
+    }
+
+    delay(100);
 }
