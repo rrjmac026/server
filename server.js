@@ -710,6 +710,103 @@ async function cleanupOldData() {
 // Add cleanup schedule (runs daily)
 setInterval(cleanupOldData, 24 * 60 * 60 * 1000);
 
+// Update the sensor data endpoint with better handling
+app.route("/api/sensor-data")
+  .get((req, res) => {
+    // Return helpful message for GET requests
+    res.status(405).json({
+      error: "Method not allowed",
+      message: "This endpoint only accepts POST requests",
+      example: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Device-ID": "ESP32_001"
+        },
+        body: {
+          plantId: "C8dA5OfZEC1EGAhkdAB4",
+          moisture: 775,
+          temperature: 27.1,
+          humidity: 95,
+          waterState: 0,
+          fertilizerState: 0,
+          deviceId: "ESP32_001"
+        }
+      }
+    });
+  })
+  .post(async (req, res) => {
+    try {
+      console.log("📥 Received request:");
+      console.log("Headers:", req.headers);
+      console.log("Body:", req.body);
+
+      // Validate request
+      if (!req.is('application/json')) {
+        return res.status(400).json({
+          error: "Invalid content type",
+          message: "Content-Type must be application/json"
+        });
+      }
+
+      const data = req.body;
+      const deviceId = req.header('X-Device-ID');
+
+      // Validate required fields
+      if (!data || !data.plantId) {
+        return res.status(400).json({
+          error: "Missing required fields",
+          message: "Request body must include plantId",
+          received: data
+        });
+      }
+
+      if (!deviceId) {
+        return res.status(400).json({
+          error: "Missing device ID",
+          message: "Request must include X-Device-ID header"
+        });
+      }
+
+      // Process the data
+      const processedData = {
+        ...data,
+        temperature: Math.round((data.temperature || 0) * 100) / 100,
+        humidity: Math.round((data.humidity || 0) * 100) / 100,
+        moisture: parseInt(data.moisture || 0),
+        moistureStatus: getMoistureStatus(data.moisture),
+        deviceId: deviceId,
+        processedAt: moment().tz('Asia/Manila').format()
+      };
+
+      // Save to Firestore
+      const savedDoc = await saveSensorData(processedData);
+
+      // Update device status
+      await db.collection("esp32_devices").doc(deviceId).set({
+        lastSeen: admin.firestore.Timestamp.now(),
+        status: ESP32_STATUS.ONLINE,
+        lastData: processedData
+      }, { merge: true });
+
+      // Send success response
+      res.status(201).json({
+        success: true,
+        message: "Data saved successfully",
+        id: savedDoc.id,
+        timestamp: processedData.processedAt
+      });
+
+    } catch (error) {
+      console.error("❌ Error processing request:", error);
+      res.status(500).json({
+        error: "Server error",
+        message: error.message,
+        timestamp: moment().tz('Asia/Manila').format()
+      });
+    }
+  });
+
 // ✅ Start the Server
 app.listen(port, () => {
   console.log(`✅ Server started at http://localhost:${port}`);
