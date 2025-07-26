@@ -56,13 +56,12 @@ async function getLatestReading(plantId) {
 
 // Function to determine moisture status
 function getMoistureStatus(moisture) {
-  // Convert raw moisture to percentage: (1023 - moisture) / 1023 * 100
-  const percentage = ((1023 - moisture) / 1023 * 100).clamp(0, 100);
-  
+  if (moisture === 1023) return "NO DATA";
   if (moisture >= 1000) return "SENSOR ERROR";
-  if (percentage < 30) return "DRY";      // 0-30%
-  if (percentage <= 70) return "HUMID";    // 31-70%
-  return "WET";                           // 71-100%
+  if (moisture > 600 && moisture < 1000) return "DRY";
+  if (moisture > 370 && moisture <= 600) return "HUMID";
+  if (moisture <= 370) return "WET";
+  return "NO DATA";
 }
 
 // Add new helper functions
