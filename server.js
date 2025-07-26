@@ -145,6 +145,17 @@ function calculateStats(readings) {
 app.post("/api/sensor-data", async (req, res) => {
   try {
     const data = req.body;
+    const deviceId = req.header('X-Device-ID');
+
+    if (!deviceId) {
+      return res.status(400).json({ error: "Device ID required" });
+    }
+
+    // Update device status
+    await db.collection("esp32_devices").doc(deviceId).update({
+      lastSeen: admin.firestore.Timestamp.now(),
+      status: ESP32_STATUS.ONLINE
+    });
 
     // Enhanced validation
     const requiredFields = ['plantId', 'moisture', 'temperature', 'humidity'];
@@ -473,6 +484,224 @@ app.get("/api/reports/:plantId", async (req, res) => {
   } catch (error) {
     console.error("❌ Report generation error:", error);
     res.status(500).json({ error: "Failed to generate report" });
+  }
+});
+
+// Add new report endpoints
+app.get("/api/reports/stats", async (req, res) => {
+  try {
+    const { plantId, start, end } = req.query;
+    
+    if (!plantId || !start || !end) {
+      return res.status(400).json({
+        error: "Missing parameters",
+        example: "/api/reports/stats?plantId=123&start=2024-01-01&end=2024-01-31"
+      });
+    }
+
+    const readings = await getReadingsInRange(plantId, start, end);
+    
+    if (readings.length === 0) {
+      return res.status(404).json({ error: "No data found" });
+    }
+
+    const stats = calculateStats(readings);
+    const count = readings.length;
+
+    res.json({
+      period: { start, end },
+      readingCount: count,
+      averages: {
+        temperature: stats.totalTemperature / count,
+        humidity: stats.totalHumidity / count,
+        moisture: stats.totalMoisture / count
+      },
+      moistureStatus: stats.moistureStatus,
+      systemStats: {
+        waterActivations: stats.waterStateCount,
+        fertilizerActivations: stats.fertilizerStateCount
+      },
+      lastReading: readings[0]
+    });
+
+  } catch (error) {
+    console.error("❌ Error generating stats:", error);
+    res.status(500).json({ error: "Failed to generate stats" });
+  }
+});
+
+// ==========================
+// ✅ Scheduling Functions
+// ==========================
+
+// Helper function to validate schedule data
+function validateScheduleData(data) {
+  const { plantId, type, time, days, duration, enabled, label } = data;
+  
+  if (!plantId) return 'Plant ID is required';
+  if (!type || !['watering', 'fertilizing'].includes(type)) return 'Valid type (watering or fertilizing) is required';
+  if (!time || !time.match(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/)) return 'Valid time in HH:MM format is required';
+  if (!days || !Array.isArray(days) || days.length === 0) return 'At least one day of the week is required';
+  if (!duration || duration < 1 || duration > 60) return 'Duration must be between 1 and 60 minutes';
+  // Label is optional, no validation needed
+  
+  return null; // No validation errors
+}
+
+// Create a new schedule
+app.post('/api/schedules', async (req, res) => {
+  try {
+    const scheduleData = req.body;
+    
+    // Validate schedule data
+    const validationError = validateScheduleData(scheduleData);
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
+    }
+    
+    // Add timestamp
+    scheduleData.createdAt = admin.firestore.FieldValue.serverTimestamp();
+    
+    // Save to Firestore
+    const docRef = await db.collection('schedules').add(scheduleData);
+    
+    res.status(201).json({ 
+      success: true, 
+      id: docRef.id,
+      schedule: scheduleData 
+    });
+  } catch (error) {
+    console.error('❌ Error creating schedule:', error);
+    res.status(500).json({ error: 'Failed to create schedule' });
+  }
+});
+
+// Get all schedules for a plant
+app.get('/api/schedules/:plantId', async (req, res) => {
+  try {
+    const { plantId } = req.params;
+    const { enabled } = req.query; // Optional query parameter to filter by enabled status
+    
+    // Create base query
+    let query = db.collection('schedules').where('plantId', '==', plantId);
+    
+    // Add enabled filter if specified
+    if (enabled !== undefined) {
+      const enabledBool = enabled === 'true';
+      query = query.where('enabled', '==', enabledBool);
+    }
+    
+    // Add ordering
+    const schedulesSnapshot = await query.orderBy('createdAt', 'desc').get();
+
+    const schedules = schedulesSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt ? doc.data().createdAt.toDate() : null
+    }));
+
+    res.json({ schedules });
+  } catch (error) {
+    console.error('❌ Error fetching schedules:', error);
+    res.status(500).json({ error: 'Failed to fetch schedules' });
+  }
+});
+
+// Update a schedule
+app.put('/api/schedules/:scheduleId', async (req, res) => {
+  try {
+    const { scheduleId } = req.params;
+    const updateData = req.body;
+    
+    // Validate update data
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ error: 'No update data provided' });
+    }
+    
+    // Update in Firestore
+    await db.collection('schedules').doc(scheduleId).update({
+      ...updateData,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    
+    res.json({ success: true, id: scheduleId });
+  } catch (error) {
+    console.error('❌ Error updating schedule:', error);
+    res.status(500).json({ error: 'Failed to update schedule' });
+  }
+});
+
+// Delete a schedule
+app.delete('/api/schedules/:scheduleId', async (req, res) => {
+  try {
+    const { scheduleId } = req.params;
+    
+    // Delete from Firestore
+    await db.collection('schedules').doc(scheduleId).delete();
+    
+    res.json({ success: true, id: scheduleId });
+  } catch (error) {
+    console.error('❌ Error deleting schedule:', error);
+    res.status(500).json({ error: 'Failed to delete schedule' });
+  }
+});
+
+// Note: The polling endpoint for schedules has been merged with the main GET endpoint
+// Use /api/schedules/:plantId?enabled=true to get only enabled schedules
+
+// Add after the helper functions
+const ESP32_STATUS = {
+  ONLINE: 'online',
+  OFFLINE: 'offline',
+  ERROR: 'error'
+};
+
+// ESP32 Device Registration
+app.post("/api/esp32/register", async (req, res) => {
+  try {
+    const { deviceId, plantId } = req.body;
+    
+    if (!deviceId || !plantId) {
+      return res.status(400).json({ error: "Device ID and Plant ID required" });
+    }
+
+    await db.collection("esp32_devices").doc(deviceId).set({
+      plantId,
+      status: ESP32_STATUS.ONLINE,
+      lastSeen: admin.firestore.Timestamp.now(),
+      registeredAt: admin.firestore.Timestamp.now()
+    });
+
+    res.status(201).json({ status: "Device registered successfully" });
+  } catch (error) {
+    console.error("❌ ESP32 registration error:", error);
+    res.status(500).json({ error: "Registration failed" });
+  }
+});
+
+// Add device status check
+app.get("/api/esp32/status/:deviceId", async (req, res) => {
+  try {
+    const { deviceId } = req.params;
+    const doc = await db.collection("esp32_devices").doc(deviceId).get();
+    
+    if (!doc.exists) {
+      return res.status(404).json({ error: "Device not found" });
+    }
+
+    const data = doc.data();
+    const lastSeen = data.lastSeen.toDate();
+    const isOnline = (Date.now() - lastSeen) < 5 * 60 * 1000; // 5 minutes threshold
+
+    res.json({
+      deviceId,
+      plantId: data.plantId,
+      status: isOnline ? ESP32_STATUS.ONLINE : ESP32_STATUS.OFFLINE,
+      lastSeen: lastSeen
+    });
+  } catch (error) {
+    console.error("❌ Error checking device status:", error);
+    res.status(500).json({ error: "Status check failed" });
   }
 });
 
