@@ -44,6 +44,12 @@ async function saveSensorData(data) {
   return docRef;
 }
 
+function isSensorDataStale(timestamp) {
+  const now = moment();
+  const readingTime = moment(timestamp);
+  return now.diff(readingTime, 'seconds') > 30;
+}
+
 async function getLatestReading(plantId) {
   const snapshot = await db.collection("sensor_data")
     .where("plantId", "==", plantId)
@@ -51,7 +57,16 @@ async function getLatestReading(plantId) {
     .limit(1)
     .get();
   
-  return snapshot.empty ? null : snapshot.docs[0].data();
+  if (snapshot.empty) return null;
+  
+  const data = snapshot.docs[0].data();
+  const isStale = isSensorDataStale(data.timestamp.toDate());
+  
+  return {
+    ...data,
+    isOnline: !isStale,
+    moistureStatus: isStale ? "OFFLINE" : data.moistureStatus
+  };
 }
 
 // Function to determine moisture status
@@ -178,10 +193,12 @@ app.get("/api/sensor-data", async (req, res) => {
     if (!latestReading) {
       return res.status(404).json({
         error: 'No sensor data found',
-        moisture: 0, 
-        temperature: 0, 
-        humidity: 0, 
-        moistureStatus: "NO_DATA" 
+        moisture: 0,
+        temperature: 0,
+        humidity: 0,
+        moistureStatus: "NO_DATA",
+        isOnline: false,
+        timestamp: null
       });
     }
 
@@ -189,8 +206,9 @@ app.get("/api/sensor-data", async (req, res) => {
       moisture: latestReading.moisture || 0,
       temperature: latestReading.temperature || 0,
       humidity: latestReading.humidity || 0,
-      moistureStatus: latestReading.moistureStatus || "NO_DATA",
-      timestamp: moment(latestReading.timestamp).tz('Asia/Manila').format()
+      moistureStatus: latestReading.moistureStatus,
+      timestamp: moment(latestReading.timestamp.toDate()).tz('Asia/Manila').format(),
+      isOnline: latestReading.isOnline
     };
 
     res.json(response);
