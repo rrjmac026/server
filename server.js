@@ -47,7 +47,7 @@ async function saveSensorData(data) {
 function isSensorDataStale(timestamp) {
   const now = moment();
   const readingTime = moment(timestamp);
-  return now.diff(readingTime, 'seconds') > 45;  // Changed to 45 seconds (30s interval + 15s buffer)
+  return now.diff(readingTime, 'seconds') > 35;  // Changed to 35 seconds (30s ESP32 interval + 5s buffer)
 }
 
 async function getLatestReading(plantId) {
@@ -482,46 +482,101 @@ app.get("/api/reports/:plantId", async (req, res) => {
   }
 });
 
-// Add new report endpoints
-app.get("/api/reports/stats", async (req, res) => {
+// Add after the helper functions section
+// ==========================
+// ✅ Audit Logs Endpoints
+// ==========================
+
+// Create audit log
+app.post('/api/audit-logs', async (req, res) => {
   try {
-    const { plantId, start, end } = req.query;
+    const logData = {
+      ...req.body,
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    };
     
-    if (!plantId || !start || !end) {
-      return res.status(400).json({
-        error: "Missing parameters",
-        example: "/api/reports/stats?plantId=123&start=2024-01-01&end=2024-01-31"
-      });
-    }
-
-    const readings = await getReadingsInRange(plantId, start, end);
-    
-    if (readings.length === 0) {
-      return res.status(404).json({ error: "No data found" });
-    }
-
-    const stats = calculateStats(readings);
-    const count = readings.length;
-
-    res.json({
-      period: { start, end },
-      readingCount: count,
-      averages: {
-        temperature: stats.totalTemperature / count,
-        humidity: stats.totalHumidity / count,
-        moisture: stats.totalMoisture / count
-      },
-      moistureStatus: stats.moistureStatus,
-      systemStats: {
-        waterActivations: stats.waterStateCount,
-        fertilizerActivations: stats.fertilizerStateCount
-      },
-      lastReading: readings[0]
-    });
-
+    await db.collection('audit_logs').add(logData);
+    res.status(201).json({ message: 'Audit log created' });
   } catch (error) {
-    console.error("❌ Error generating stats:", error);
-    res.status(500).json({ error: "Failed to generate stats" });
+    console.error('❌ Error creating audit log:', error);
+    res.status(500).json({ error: 'Failed to create audit log' });
+  }
+});
+
+// Get audit logs with filtering
+app.get('/api/audit-logs', async (req, res) => {
+  try {
+    const { startDate, endDate, type, action, limit = 50, page = 1 } = req.query;
+    
+    let query = db.collection('audit_logs').orderBy('timestamp', 'desc');
+    
+    if (startDate) {
+      query = query.where('timestamp', '>=', new Date(startDate));
+    }
+    if (endDate) {
+      query = query.where('timestamp', '<=', new Date(endDate));
+    }
+    if (type) {
+      query = query.where('type', '==', type);
+    }
+    if (action) {
+      query = query.where('action', '==', action);
+    }
+    
+    const snapshot = await query.get();
+    const logs = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      timestamp: doc.data().timestamp?.toDate().toISOString(),
+    }));
+    
+    res.json({ logs, total: logs.length });
+  } catch (error) {
+    console.error('❌ Error fetching audit logs:', error);
+    res.status(500).json({ error: 'Failed to fetch audit logs' });
+  }
+});
+
+// Get audit log actions
+app.get('/api/audit-logs/actions', async (req, res) => {
+  try {
+    const snapshot = await db.collection('audit_logs')
+      .select('action')
+      .get();
+    
+    const actions = [...new Set(snapshot.docs.map(doc => doc.data().action))];
+    res.json({ actions });
+  } catch (error) {
+    console.error('❌ Error fetching audit log actions:', error);
+    res.status(500).json({ error: 'Failed to fetch audit log actions' });
+  }
+});
+
+// Get audit logs stats
+app.get('/api/audit-logs/stats', async (req, res) => {
+  try {
+    const snapshot = await db.collection('audit_logs').get();
+    const logs = snapshot.docs.map(doc => doc.data());
+    
+    const stats = {
+      total: logs.length,
+      byType: {},
+      byAction: {},
+      byStatus: {
+        success: logs.filter(log => !log.error).length,
+        error: logs.filter(log => log.error).length
+      }
+    };
+    
+    logs.forEach(log => {
+      stats.byType[log.type] = (stats.byType[log.type] || 0) + 1;
+      stats.byAction[log.action] = (stats.byAction[log.action] || 0) + 1;
+    });
+    
+    res.json(stats);
+  } catch (error) {
+    console.error('❌ Error fetching audit log stats:', error);
+    res.status(500).json({ error: 'Failed to fetch audit log stats' });
   }
 });
 
