@@ -96,15 +96,7 @@ const int MAX_SMS_RETRIES = 3;
 unsigned long lastSMSAttempt = 0;
 const unsigned long SMS_RETRY_INTERVAL = 10000;  // 10 seconds between retries
 
-// Add these constants after other timing constants
-const unsigned long HEARTBEAT_INTERVAL = 60000;  // Send heartbeat every 60 seconds
-unsigned long lastHeartbeatTime = 0;
-
-// Add missing variable for last DHT read time
-unsigned long lastDHTRead = 0;
-const unsigned long DHT_READ_INTERVAL = 2000;  // 2 seconds
-
-// Add these with other GSM definitions
+// Add these constants after other GSM definitions
 enum GSMStatus {
     GSM_ERROR,
     GSM_READY,
@@ -318,19 +310,26 @@ void sendDataToServer(int moisture, bool waterState, float temperature, float hu
         return;
     }
 
+    struct tm timeinfo;
+    if(!getLocalTime(&timeinfo)) {
+        Serial.println("Failed to obtain time");
+        return;
+    }
+
+    char timestamp[25];
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S.000Z", &timeinfo);
+
     // Create JSON document
     StaticJsonDocument<200> doc;
     doc["plantId"] = FIXED_PLANT_ID;
-    doc["moisture"] = convertToMoisturePercent(moisture);  // Send percentage instead of raw value
+    doc["moisture"] = convertToMoisturePercent(moisture);
     doc["temperature"] = temperature;
     doc["humidity"] = humidity;
     doc["waterState"] = waterState;
     doc["fertilizerState"] = fertilizerState;
+    doc["timestamp"] = timestamp;
+    doc["isConnected"] = true;  // Add explicit connection state
 
-    // Update JSON document to include timestamp
-    doc["timestamp"] = millis();  // Add device uptime
-    doc["isOnline"] = true;
-    
     String jsonString;
     serializeJson(doc, jsonString);
 
@@ -440,10 +439,10 @@ int convertToMoisturePercent(int rawValue) {
 }
 
 String getMoistureStatus(int moisturePercent) {
-    if (moisturePercent >= 95) return "SENSOR ERROR";  // Updated threshold for sensor error
-    if (moisturePercent <= 40) return "WET";
-    if (moisturePercent > 40 && moisturePercent <= 65) return "HUMID";
-    return "DRY";
+  if (moisturePercent >= 95) return "WET";          // In water
+  if (moisturePercent >= 60) return "HUMID";        // Moist enough
+  if (moisturePercent >= 1) return "DRY";           // Needs water
+  return "SENSOR ERROR";                            // 0% = disconnected or very dry
 }
 
 // Add new constant for watchdog control
@@ -646,12 +645,12 @@ void loop() {
         // Read soil moisture and convert to percentage
         soilMoistureValue = analogRead(soilMoisturePin);
         moisturePercent = convertToMoisturePercent(soilMoistureValue);
-        moistureStatus = getMoistureStatus(moisturePercent);
 
-        // Add debug prints
-        Serial.println("Raw moisture value: " + String(soilMoistureValue));
-        Serial.println("Moisture percent: " + String(moisturePercent) + "%");
-        Serial.println("Moisture status: " + moistureStatus);
+        updateMoistureHistory(moisturePercent);
+        rapidDrying = detectRapidDrying();
+        
+        // Update status and display
+        moistureStatus = getMoistureStatus(moisturePercent);
         
         // Print readings
         char msgBuffer[100];
@@ -671,20 +670,6 @@ void loop() {
     if (currentMillis - lastSendTime >= SEND_INTERVAL) {
         sendDataToServer(soilMoistureValue, waterState, temperature, humidity);
         lastSendTime = currentMillis;
-    }
-
-    // Add heartbeat logic
-    if (currentMillis - lastHeartbeatTime >= HEARTBEAT_INTERVAL) {
-        if (WiFi.status() == WL_CONNECTED) {
-            // Send current sensor states even if they haven't changed
-            float currentTemp = dht.readTemperature();
-            float currentHumidity = dht.readHumidity();
-            int currentMoisture = analogRead(soilMoisturePin);
-            
-            // Send heartbeat data
-            sendDataToServer(currentMoisture, waterState, currentTemp, currentHumidity);
-            lastHeartbeatTime = currentMillis;
-        }
     }
 
     resumeWatchdog();
