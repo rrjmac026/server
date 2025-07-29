@@ -482,46 +482,123 @@ app.get("/api/reports/:plantId", async (req, res) => {
   }
 });
 
-// Add new report endpoints
-app.get("/api/reports/stats", async (req, res) => {
+// Add after other endpoints
+// ==========================
+// ✅ Audit Logs Endpoints
+// ==========================
+
+const auditLogs = [];  // In-memory storage for logs
+
+function addAuditLog(action, details, status = 'success', userId = 'system') {
+  const log = {
+    id: Date.now().toString(),
+    timestamp: moment().tz('Asia/Manila').toDate(),
+    action,
+    details,
+    status,
+    userId,
+    ipAddress: null,
+    userAgent: null
+  };
+  auditLogs.unshift(log);  // Add to beginning
+  if (auditLogs.length > 1000) auditLogs.pop();  // Keep last 1000 logs
+  return log;
+}
+
+// Middleware to log API requests
+app.use((req, res, next) => {
+  const startTime = Date.now();
+  const log = {
+    timestamp: moment().tz('Asia/Manila').toDate(),
+    method: req.method,
+    path: req.path,
+    ipAddress: req.ip,
+    userAgent: req.get('user-agent'),
+    requestBody: req.method !== 'GET' ? req.body : null
+  };
+  
+  res.on('finish', () => {
+    log.duration = Date.now() - startTime;
+    log.status = res.statusCode;
+    addAuditLog('API_REQUEST', log);
+  });
+  
+  next();
+});
+
+// Get audit logs with filtering and pagination
+app.get("/api/audit-logs", (req, res) => {
   try {
-    const { plantId, start, end } = req.query;
-    
-    if (!plantId || !start || !end) {
-      return res.status(400).json({
-        error: "Missing parameters",
-        example: "/api/reports/stats?plantId=123&start=2024-01-01&end=2024-01-31"
+    const { 
+      start, 
+      end, 
+      action, 
+      status,
+      limit = 50,
+      page = 1
+    } = req.query;
+
+    let filteredLogs = [...auditLogs];
+
+    if (start && end) {
+      filteredLogs = filteredLogs.filter(log => {
+        const timestamp = moment(log.timestamp);
+        return timestamp.isBetween(start, end, null, '[]');
       });
     }
 
-    const readings = await getReadingsInRange(plantId, start, end);
-    
-    if (readings.length === 0) {
-      return res.status(404).json({ error: "No data found" });
+    if (action) {
+      filteredLogs = filteredLogs.filter(log => log.action === action);
     }
 
-    const stats = calculateStats(readings);
-    const count = readings.length;
+    if (status) {
+      filteredLogs = filteredLogs.filter(log => log.status === status);
+    }
+
+    // Pagination
+    const startIndex = (page - 1) * limit;
+    const paginatedLogs = filteredLogs.slice(startIndex, startIndex + Number(limit));
 
     res.json({
-      period: { start, end },
-      readingCount: count,
-      averages: {
-        temperature: stats.totalTemperature / count,
-        humidity: stats.totalHumidity / count,
-        moisture: stats.totalMoisture / count
-      },
-      moistureStatus: stats.moistureStatus,
-      systemStats: {
-        waterActivations: stats.waterStateCount,
-        fertilizerActivations: stats.fertilizerStateCount
-      },
-      lastReading: readings[0]
+      total: filteredLogs.length,
+      page: Number(page),
+      limit: Number(limit),
+      logs: paginatedLogs
     });
 
   } catch (error) {
-    console.error("❌ Error generating stats:", error);
-    res.status(500).json({ error: "Failed to generate stats" });
+    console.error("❌ Error fetching audit logs:", error);
+    res.status(500).json({ error: "Failed to fetch audit logs" });
+  }
+});
+
+// Get audit log actions for filtering
+app.get("/api/audit-logs/actions", (req, res) => {
+  const actions = [...new Set(auditLogs.map(log => log.action))];
+  res.json({ actions });
+});
+
+// Get audit log statistics
+app.get("/api/audit-logs/stats", (req, res) => {
+  try {
+    const stats = {
+      total: auditLogs.length,
+      byStatus: {},
+      byAction: {},
+      recentErrors: auditLogs
+        .filter(log => log.status === 'error')
+        .slice(0, 5)
+    };
+
+    auditLogs.forEach(log => {
+      stats.byStatus[log.status] = (stats.byStatus[log.status] || 0) + 1;
+      stats.byAction[log.action] = (stats.byAction[log.action] || 0) + 1;
+    });
+
+    res.json(stats);
+  } catch (error) {
+    console.error("❌ Error fetching audit log stats:", error);
+    res.status(500).json({ error: "Failed to fetch audit log statistics" });
   }
 });
 
