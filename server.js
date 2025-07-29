@@ -47,7 +47,7 @@ async function saveSensorData(data) {
 function isSensorDataStale(timestamp) {
   const now = moment();
   const readingTime = moment(timestamp);
-  return now.diff(readingTime, 'seconds') > 30;  // Reduced to 5 seconds for faster offline detection
+  return now.diff(readingTime, 'seconds') > 45;  // Changed to 45 seconds (30s interval + 15s buffer)
 }
 
 async function getLatestReading(plantId) {
