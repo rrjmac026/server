@@ -8,12 +8,6 @@ const moment = require('moment-timezone');
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Constants for offline detection
-const SENSOR_OFFLINE_THRESHOLD = 120000; // 2 minutes in milliseconds
-
-// Store last updates from sensors
-const sensorLastUpdate = new Map();
-
 // ✅ Firestore Credentials Check
 if (!process.env.FIREBASE_CREDENTIALS) {
   console.error("❌ FIREBASE_CREDENTIALS missing! Set it in environment variables.");
@@ -30,17 +24,6 @@ const db = admin.firestore();
 app.use(cors({ origin: "*" }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// Middleware to validate sensor data
-function validateSensorData(req, res, next) {
-    const sensorData = req.body;
-    const currentTime = Date.now();
-    const sensorId = sensorData.plantId;
-    
-    // Update last seen timestamp
-    sensorLastUpdate.set(sensorId, currentTime);
-    next();
-}
 
 // ✅ Default Route
 app.get("/", (req, res) => {
@@ -64,7 +47,7 @@ async function saveSensorData(data) {
 function isSensorDataStale(timestamp) {
   const now = moment();
   const readingTime = moment(timestamp);
-  return now.diff(readingTime, 'seconds') > 30;
+  return now.diff(readingTime, 'seconds') > 15;  // Reduced from 30 to 15 seconds for faster detection
 }
 
 async function getLatestReading(plantId) {
@@ -78,20 +61,27 @@ async function getLatestReading(plantId) {
   
   const data = snapshot.docs[0].data();
   const isStale = isSensorDataStale(data.timestamp.toDate());
+  const isValidMoisture = data.moisture !== null && data.moisture !== undefined;
+  const isConnected = !isStale && isValidMoisture;
   
   return {
     ...data,
-    isOnline: !isStale,
-    moistureStatus: isStale ? "OFFLINE" : data.moistureStatus
+    timestamp: data.timestamp,
+    isConnected,
+    isOnline: isConnected,
+    moistureStatus: !isConnected ? "OFFLINE" : getMoistureStatus(data.moisture)
   };
 }
 
 // Function to determine moisture status
 function getMoistureStatus(moisture) {
-  if (moisture >= 95) return "SENSOR ERROR";
-  if (moisture <= 40) return "WET";
-  if (moisture > 40 && moisture <= 65) return "HUMID";
-  return "DRY";
+  if (!moisture || moisture === null) return "NO DATA";
+  if (moisture === 1023) return "SENSOR ERROR";
+  if (moisture >= 1000) return "SENSOR ERROR";
+  if (moisture > 600 && moisture < 1000) return "DRY";
+  if (moisture > 370 && moisture <= 600) return "HUMID";
+  if (moisture <= 370) return "WET";
+  return "NO DATA";
 }
 
 // Add new helper functions
@@ -172,7 +162,7 @@ function calculateStats(readings) {
 // ==========================
 // ✅ Receive POST Sensor Data (from ESP32)
 // ==========================
-app.post("/api/sensor-data", validateSensorData, async (req, res) => {
+app.post("/api/sensor-data", async (req, res) => {
   try {
     const data = req.body;
 
@@ -213,19 +203,19 @@ app.get("/api/sensor-data", async (req, res) => {
         humidity: 0,
         moistureStatus: "OFFLINE",
         isOnline: false,
+        isConnected: false,
         timestamp: null
       });
     }
 
-    const isOffline = isDeviceOffline(latestReading.timestamp.toDate());
-    
     const response = {
-      moisture: isOffline ? 0 : (latestReading.moisture || 0),
-      temperature: isOffline ? 0 : (latestReading.temperature || 0),
-      humidity: isOffline ? 0 : (latestReading.humidity || 0),
-      moistureStatus: isOffline ? "OFFLINE" : latestReading.moistureStatus,
+      moisture: latestReading.isConnected ? latestReading.moisture : 0,
+      temperature: latestReading.isConnected ? latestReading.temperature : 0,
+      humidity: latestReading.isConnected ? latestReading.humidity : 0,
+      moistureStatus: latestReading.moistureStatus,
       timestamp: moment(latestReading.timestamp.toDate()).tz('Asia/Manila').format(),
-      isOnline: !isOffline
+      isOnline: latestReading.isConnected,
+      isConnected: latestReading.isConnected
     };
 
     res.json(response);
@@ -486,14 +476,6 @@ app.get("/api/reports/:plantId", async (req, res) => {
     res.status(500).json({ error: "Failed to generate report" });
   }
 });
-
-// Add new helper function to check if device is offline
-function isDeviceOffline(lastTimestamp) {
-  if (!lastTimestamp) return true;
-  const now = moment();
-  const lastUpdate = moment(lastTimestamp);
-  return now.diff(lastUpdate, 'minutes') > 1; // Consider offline after 2 minutes of no updates
-}
 
 // Add new report endpoints
 app.get("/api/reports/stats", async (req, res) => {
