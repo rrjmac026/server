@@ -47,7 +47,7 @@ async function saveSensorData(data) {
 function isSensorDataStale(timestamp) {
   const now = moment();
   const readingTime = moment(timestamp);
-  return now.diff(readingTime, 'seconds') > 15;  // Reduced from 30 to 15 seconds for faster detection
+  return now.diff(readingTime, 'seconds') > 5;  // Reduced to 5 seconds for faster offline detection
 }
 
 async function getLatestReading(plantId) {
@@ -61,14 +61,18 @@ async function getLatestReading(plantId) {
   
   const data = snapshot.docs[0].data();
   const isStale = isSensorDataStale(data.timestamp.toDate());
-  const isValidMoisture = data.moisture !== null && data.moisture !== undefined;
-  const isConnected = !isStale && isValidMoisture;
+  
+  // Only consider data valid if it's not stale and explicitly marked as connected
+  const isConnected = !isStale && data.isConnected === true;
   
   return {
     ...data,
     timestamp: data.timestamp,
     isConnected,
     isOnline: isConnected,
+    moisture: isConnected ? data.moisture : 0,
+    temperature: isConnected ? data.temperature : 0,
+    humidity: isConnected ? data.humidity : 0,
     moistureStatus: !isConnected ? "OFFLINE" : getMoistureStatus(data.moisture)
   };
 }
@@ -171,7 +175,8 @@ app.post("/api/sensor-data", async (req, res) => {
       return res.status(400).json({ error: "Incomplete sensor data" });
     }
 
-    // Determine moisture status
+    // Add explicit connection state from ESP32
+    data.isConnected = true;  // ESP32 only sends data when connected
     data.moistureStatus = getMoistureStatus(data.moisture);
 
     // Save to Firestore
