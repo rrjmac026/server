@@ -458,19 +458,21 @@ app.get("/api/reports/:plantId", async (req, res) => {
       doc.fontSize(14).text('All Sensor Readings:', { underline: true });
       doc.moveDown();
 
-      // Calculate total pages
-      const itemsPerPage = 15;
+      const PAGE_MARGIN = 50;
+      const PAGE_HEIGHT = doc.page.height - PAGE_MARGIN;
+      const ENTRY_HEIGHT = 140; // Approximate height of each reading entry
+      const itemsPerPage = Math.floor((PAGE_HEIGHT - PAGE_MARGIN) / ENTRY_HEIGHT);
       const totalPages = Math.ceil(readings.length / itemsPerPage);
 
-      // Write all readings with pagination
       readings.forEach((reading, index) => {
-        // Add page number at the top of each page
-        if (index % itemsPerPage === 0) {
+        // Check if we need a new page
+        if (doc.y > PAGE_HEIGHT - ENTRY_HEIGHT || index % itemsPerPage === 0) {
           if (index > 0) doc.addPage();
           doc.fontSize(12).text(`Page ${Math.floor(index/itemsPerPage) + 1} of ${totalPages}`, { align: 'right' });
           doc.moveDown();
         }
 
+        // Write reading data
         doc.fontSize(12)
           .text(`Time: ${moment(reading.timestamp).tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss')}`)
           .text(`Temperature: ${reading.temperature}°C`)
