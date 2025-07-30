@@ -338,8 +338,18 @@ app.get("/api/reports", async (req, res) => {
       currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
       
       readings.forEach((reading, index) => {
-        if (currentY > doc.page.height - 70) {
-          doc.addPage();
+        if (!currentY || currentY > doc.page.height - 70) {
+          // Add footer to current page if it's not the first page
+          if (currentY) {
+            drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
+          }
+          
+          // Add new page
+          if (currentY) {
+            doc.addPage();
+          }
+          
+          // Reset Y position and add header
           currentY = drawPageHeader(doc, Math.floor(index / 20) + 2);
           currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
         }
@@ -352,9 +362,20 @@ app.get("/api/reports", async (req, res) => {
           reading.moistureStatus || 'N/A'
         ];
         
-        currentY = drawTableRow(doc, rowData, tableX, currentY, tableWidth);
+        const newY = drawTableRow(doc, rowData, tableX, currentY, tableWidth);
+        if (newY === false) {
+          // Need a new page
+          drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
+          doc.addPage();
+          currentY = drawPageHeader(doc, Math.floor(index / 20) + 2);
+          currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
+          currentY = drawTableRow(doc, rowData, tableX, currentY, tableWidth);
+        } else {
+          currentY = newY;
+        }
       });
       
+      // Add footer to the last page
       drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
       
       doc.end();
@@ -442,8 +463,18 @@ app.get("/api/reports/:plantId", async (req, res) => {
       currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
       
       readings.forEach((reading, index) => {
-        if (currentY > doc.page.height - 70) {
-          doc.addPage();
+        if (!currentY || currentY > doc.page.height - 70) {
+          // Add footer to current page if it's not the first page
+          if (currentY) {
+            drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
+          }
+          
+          // Add new page
+          if (currentY) {
+            doc.addPage();
+          }
+          
+          // Reset Y position and add header
           currentY = drawPageHeader(doc, Math.floor(index / 20) + 2);
           currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
         }
@@ -456,9 +487,20 @@ app.get("/api/reports/:plantId", async (req, res) => {
           reading.moistureStatus || 'N/A'
         ];
         
-        currentY = drawTableRow(doc, rowData, tableX, currentY, tableWidth);
+        const newY = drawTableRow(doc, rowData, tableX, currentY, tableWidth);
+        if (newY === false) {
+          // Need a new page
+          drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
+          doc.addPage();
+          currentY = drawPageHeader(doc, Math.floor(index / 20) + 2);
+          currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
+          currentY = drawTableRow(doc, rowData, tableX, currentY, tableWidth);
+        } else {
+          currentY = newY;
+        }
       });
       
+      // Add footer to the last page
       drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
       
       doc.end();
@@ -503,6 +545,11 @@ function drawTableHeader(doc, headers, x, y, width) {
 
 function drawTableRow(doc, data, x, y, width) {
   const cellWidth = width / data.length;
+  
+  // Check if we need a new page (including space for footer)
+  if (y > doc.page.height - 50) {
+    return false;  // Signal that we need a new page
+  }
   
   // Alternate row background
   doc.fillColor('#f9f9f9', 0.5)
@@ -559,7 +606,7 @@ function drawPageHeader(doc, pageNumber, title) {
 
 function drawPageFooter(doc, timestamp) {
   const pageWidth = doc.page.width;
-  const footerY = doc.page.height - 50;
+  const footerY = doc.page.height - 30;  // Moved up slightly
   
   // Footer line
   doc.moveTo(50, footerY)
@@ -574,7 +621,7 @@ function drawPageFooter(doc, timestamp) {
      .text(
        `Generated on ${timestamp} - Plant Monitoring System`,
        50,
-       footerY + 10,
+       footerY + 5,  // Adjusted position
        { align: 'center', width: pageWidth - 100 }
      );
 }
