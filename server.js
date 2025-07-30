@@ -298,141 +298,65 @@ app.get("/api/reports", async (req, res) => {
       const doc = new PDFDocument({ margin: 50 });
       doc.pipe(res);
 
-      // Enhanced PDF Header with Logo
-      try {
-        // Add logo
-        doc.image('d:/Bayot FIles/Desktop/Server/assets/ic_new_icon.png', 50, 45, {
-          width: 50,
-          height: 50
-        });
-      } catch (error) {
-        console.warn('Warning: Logo file not found', error);
-      }
+      let currentY = drawPageHeader(doc, 1, 'Plant Monitoring Report');
+      currentY += 20;
 
-      // Header Design
-      doc.font('Helvetica-Bold')
-         .fontSize(24)
-         .text('Plant Monitoring System', 120, 50)
-         .fontSize(16)
-         .text('Detailed Report', 120, 75);
-
-      // Add decorative line
-      doc.moveTo(50, 110)
-         .lineTo(550, 110)
-         .strokeColor('#2e7d32')
-         .lineWidth(2)
-         .stroke();
-
-      // Report Details with better formatting
-      doc.moveDown(2)
-         .font('Helvetica')
-         .fontSize(12)
-         .fillColor('#000000');
-
-      // Create a table-like structure for report details
-      const startX = 50;
-      let startY = doc.y;
+      // Report details in a centered table
+      const reportDetailsWidth = 400;
+      const startX = (doc.page.width - reportDetailsWidth) / 2;
       
-      // Left column
-      doc.text('Plant ID:', startX, startY)
-         .font('Helvetica-Bold')
-         .text(plantId, startX + 100, startY)
-         .font('Helvetica');
-
-      // Right column
-      doc.text('Generated:', 300, startY)
-         .font('Helvetica-Bold')
-         .text(moment().tz('Asia/Manila').format('YYYY-MM-DD LT'), 380, startY)
-         .font('Helvetica');
-
-      // Second row
-      startY += 25;
-      doc.text('Period:', startX, startY)
-         .font('Helvetica-Bold')
-         .text(`${moment(start).tz('Asia/Manila').format('YYYY-MM-DD')} to ${moment(end).tz('Asia/Manila').format('YYYY-MM-DD')}`, 
-               startX + 100, startY)
-         .font('Helvetica');
-
-      // Add another decorative line
-      doc.moveDown(2)
-         .moveTo(50, doc.y)
-         .lineTo(550, doc.y)
-         .strokeColor('#2e7d32')
-         .lineWidth(1)
-         .stroke()
-         .moveDown();
-
-      // Rest of your PDF generation code...
-      if (readings.length === 0) {
-        doc.fontSize(12).text('No data found for the specified period.');
-        doc.end();
-        return;
-      }
-
-      // Calculate statistics
-      let stats = {
-        totalTemperature: 0,
-        totalHumidity: 0,
-        totalMoisture: 0,
-        moistureStatus: { dry: 0, humid: 0, wet: 0 },
-        waterStateCount: 0,
-        fertilizerStateCount: 0
-      };
-
-      readings.forEach(reading => {
-        stats.totalTemperature += reading.temperature || 0;
-        stats.totalHumidity += reading.humidity || 0;
-        stats.totalMoisture += reading.moisture || 0;
-        const status = (reading.moistureStatus || 'unknown').toLowerCase();
-        stats.moistureStatus[status] = (stats.moistureStatus[status] || 0) + 1;
-        stats.waterStateCount += reading.waterState ? 1 : 0;
-        stats.fertilizerStateCount += reading.fertilizerState ? 1 : 0;
+      // Details table
+      doc.rect(startX, currentY, reportDetailsWidth, 60)
+         .fillColor('#f9f9f9')
+         .fill();
+      
+      doc.font('Helvetica')
+         .fontSize(10)
+         .fillColor('#000000');
+      
+      // Details rows
+      const detailsData = [
+        ['Plant ID:', plantId, 'Generated:', moment().tz('Asia/Manila').format('YYYY-MM-DD LT')],
+        ['Period:', `${moment(start).format('YYYY-MM-DD')} to ${moment(end).format('YYYY-MM-DD')}`, '', '']
+      ];
+      
+      detailsData.forEach((row, i) => {
+        const rowY = currentY + (i * 25) + 10;
+        doc.font('Helvetica-Bold').text(row[0], startX + 20, rowY);
+        doc.font('Helvetica').text(row[1], startX + 80, rowY);
+        doc.font('Helvetica-Bold').text(row[2], startX + 220, rowY);
+        doc.font('Helvetica').text(row[3], startX + 280, rowY);
       });
+      
+      currentY += 80;
 
-      // Write statistics
-      doc.fontSize(16).text('Summary Statistics:', { underline: true });
-      doc.fontSize(12)
-        .text(`Total Readings: ${readings.length}`)
-        .text(`Average Temperature: ${(stats.totalTemperature / readings.length).toFixed(2)}°C`)
-        .text(`Average Humidity: ${(stats.totalHumidity / readings.length).toFixed(2)}%`)
-        .text(`Average Moisture: ${(stats.totalMoisture / readings.length).toFixed(2)}%`)
-        .text(`Water System Activations: ${stats.waterStateCount}`)
-        .text(`Fertilizer System Activations: ${stats.fertilizerStateCount}`);
-      doc.moveDown(2);
-
-      // Write ALL readings
-      doc.fontSize(16).text('All Sensor Readings:', { underline: true });
-      doc.moveDown();
-
-      // Constants for pagination
-      const READING_HEIGHT = 85; // Height needed for each reading entry
-      const BOTTOM_MARGIN = 100; // Space to leave at bottom of page
-      let currentPage = 1;
-
+      // Readings table
+      const tableWidth = doc.page.width - 100;
+      const tableX = 50;
+      
+      const headers = ['Date & Time', 'Temperature', 'Humidity', 'Moisture', 'Status'];
+      currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
+      
       readings.forEach((reading, index) => {
-        // Check if we need a new page
-        if (doc.y > (doc.page.height - BOTTOM_MARGIN - READING_HEIGHT)) {
+        if (currentY > doc.page.height - 70) {
           doc.addPage();
-          currentPage++;
-          
-          // Add page header
-          doc.fontSize(10).text(`Page ${currentPage} - Plant Monitoring Report`, { align: 'right' });
-          doc.moveDown();
+          currentY = drawPageHeader(doc, Math.floor(index / 20) + 2);
+          currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
         }
-
-        // Write reading data with better formatting
-        doc.fontSize(11)
-          .text(`Reading ${index + 1} - ${moment(reading.timestamp).tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss')}`, { underline: true })
-          .fontSize(10)
-          .text(`Temperature: ${reading.temperature || 'N/A'}°C | Humidity: ${reading.humidity || 'N/A'}% | Moisture: ${reading.moisture || 'N/A'}%`)
-          .text(`Status: ${reading.moistureStatus || 'N/A'} | Water: ${reading.waterState ? "ON" : "OFF"} | Fertilizer: ${reading.fertilizerState ? "ON" : "OFF"}`);
         
-        doc.moveDown(0.5);
+        const rowData = [
+          moment(reading.timestamp).format('YYYY-MM-DD HH:mm:ss'),
+          `${reading.temperature || 'N/A'}°C`,
+          `${reading.humidity || 'N/A'}%`,
+          `${reading.moisture || 'N/A'}%`,
+          reading.moistureStatus || 'N/A'
+        ];
+        
+        currentY = drawTableRow(doc, rowData, tableX, currentY, tableWidth);
       });
-
-      // Add footer on last page
-      doc.fontSize(10).text(`Report generated on ${moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss')}`, { align: 'center' });
-
+      
+      drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
+      
       doc.end();
     } else {
       // JSON format - return all readings
@@ -478,144 +402,65 @@ app.get("/api/reports/:plantId", async (req, res) => {
       const doc = new PDFDocument({ margin: 50 });
       doc.pipe(res);
 
-      // Enhanced PDF Header with Logo
-      try {
-        // Add logo
-        doc.image('d:/Bayot FIles/Desktop/Server/assets/ic_new_icon.png', 50, 45, {
-          width: 50,
-          height: 50
-        });
-      } catch (error) {
-        console.warn('Warning: Logo file not found', error);
-      }
+      let currentY = drawPageHeader(doc, 1, 'Plant Monitoring Report');
+      currentY += 20;
 
-      // Header Design
-      doc.font('Helvetica-Bold')
-         .fontSize(24)
-         .text('Plant Monitoring System', 120, 50)
-         .fontSize(16)
-         .text('Detailed Report', 120, 75);
-
-      // Add decorative line
-      doc.moveTo(50, 110)
-         .lineTo(550, 110)
-         .strokeColor('#2e7d32')
-         .lineWidth(2)
-         .stroke();
-
-      // Report Details with better formatting
-      doc.moveDown(2)
-         .font('Helvetica')
-         .fontSize(12)
-         .fillColor('#000000');
-
-      // Create a table-like structure for report details
-      const startX = 50;
-      let startY = doc.y;
+      // Report details in a centered table
+      const reportDetailsWidth = 400;
+      const startX = (doc.page.width - reportDetailsWidth) / 2;
       
-      // Left column
-      doc.text('Plant ID:', startX, startY)
-         .font('Helvetica-Bold')
-         .text(plantId, startX + 100, startY)
-         .font('Helvetica');
-
-      // Right column
-      doc.text('Generated:', 300, startY)
-         .font('Helvetica-Bold')
-         .text(moment().tz('Asia/Manila').format('YYYY-MM-DD LT'), 380, startY)
-         .font('Helvetica');
-
-      // Second row
-      startY += 25;
-      doc.text('Period:', startX, startY)
-         .font('Helvetica-Bold')
-         .text(`${moment(start).tz('Asia/Manila').format('YYYY-MM-DD')} to ${moment(end).tz('Asia/Manila').format('YYYY-MM-DD')}`, 
-               startX + 100, startY)
-         .font('Helvetica');
-
-      // Add another decorative line
-      doc.moveDown(2)
-         .moveTo(50, doc.y)
-         .lineTo(550, doc.y)
-         .strokeColor('#2e7d32')
-         .lineWidth(1)
-         .stroke()
-         .moveDown();
-
-      // Rest of your PDF generation code...
-      if (readings.length === 0) {
-        doc.fontSize(12).text('No data found for the specified period.');
-        doc.end();
-        return;
-      }
-
-      // Calculate statistics
-      let stats = {
-        totalTemperature: 0,
-        totalHumidity: 0,
-        totalMoisture: 0,
-        moistureStatus: { dry: 0, humid: 0, wet: 0 },
-        waterStateCount: 0,
-        fertilizerStateCount: 0
-      };
-
-      readings.forEach(reading => {
-        stats.totalTemperature += reading.temperature || 0;
-        stats.totalHumidity += reading.humidity || 0;
-        stats.totalMoisture += reading.moisture || 0;
-        const status = (reading.moistureStatus || 'unknown').toLowerCase();
-        stats.moistureStatus[status] = (stats.moistureStatus[status] || 0) + 1;
-        stats.waterStateCount += reading.waterState ? 1 : 0;
-        stats.fertilizerStateCount += reading.fertilizerState ? 1 : 0;
+      // Details table
+      doc.rect(startX, currentY, reportDetailsWidth, 60)
+         .fillColor('#f9f9f9')
+         .fill();
+      
+      doc.font('Helvetica')
+         .fontSize(10)
+         .fillColor('#000000');
+      
+      // Details rows
+      const detailsData = [
+        ['Plant ID:', plantId, 'Generated:', moment().tz('Asia/Manila').format('YYYY-MM-DD LT')],
+        ['Period:', `${moment(start).format('YYYY-MM-DD')} to ${moment(end).format('YYYY-MM-DD')}`, '', '']
+      ];
+      
+      detailsData.forEach((row, i) => {
+        const rowY = currentY + (i * 25) + 10;
+        doc.font('Helvetica-Bold').text(row[0], startX + 20, rowY);
+        doc.font('Helvetica').text(row[1], startX + 80, rowY);
+        doc.font('Helvetica-Bold').text(row[2], startX + 220, rowY);
+        doc.font('Helvetica').text(row[3], startX + 280, rowY);
       });
+      
+      currentY += 80;
 
-      // Write statistics
-      doc.fontSize(16).text('Summary Statistics:', { underline: true });
-      doc.fontSize(12)
-        .text(`Total Readings: ${readings.length}`)
-        .text(`Average Temperature: ${(stats.totalTemperature / readings.length).toFixed(2)}°C`)
-        .text(`Average Humidity: ${(stats.totalHumidity / readings.length).toFixed(2)}%`)
-        .text(`Average Moisture: ${(stats.totalMoisture / readings.length).toFixed(2)}%`)
-        .text(`Water System Activations: ${stats.waterStateCount}`)
-        .text(`Fertilizer System Activations: ${stats.fertilizerStateCount}`);
-      doc.moveDown(2);
-
-      // Write ALL readings
-      doc.fontSize(16).text('All Sensor Readings:', { underline: true });
-      doc.moveDown();
-
-      // Constants for pagination
-      const READING_HEIGHT = 85; // Height needed for each reading entry
-      const BOTTOM_MARGIN = 100; // Space to leave at bottom of page
-      let currentPage = 1;
-      let readingsOnCurrentPage = 0;
-
+      // Readings table
+      const tableWidth = doc.page.width - 100;
+      const tableX = 50;
+      
+      const headers = ['Date & Time', 'Temperature', 'Humidity', 'Moisture', 'Status'];
+      currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
+      
       readings.forEach((reading, index) => {
-        // Check if we need a new page
-        if (doc.y > (doc.page.height - BOTTOM_MARGIN - READING_HEIGHT)) {
+        if (currentY > doc.page.height - 70) {
           doc.addPage();
-          currentPage++;
-          readingsOnCurrentPage = 0;
-          
-          // Add page header
-          doc.fontSize(10).text(`Page ${currentPage} - Plant Monitoring Report`, { align: 'right' });
-          doc.moveDown();
+          currentY = drawPageHeader(doc, Math.floor(index / 20) + 2);
+          currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
         }
-
-        // Write reading data with better formatting
-        doc.fontSize(11)
-          .text(`Reading ${index + 1} - ${moment(reading.timestamp).tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss')}`, { underline: true })
-          .fontSize(10)
-          .text(`Temperature: ${reading.temperature || 'N/A'}°C | Humidity: ${reading.humidity || 'N/A'}% | Moisture: ${reading.moisture || 'N/A'}%`)
-          .text(`Status: ${reading.moistureStatus || 'N/A'} | Water: ${reading.waterState ? "ON" : "OFF"} | Fertilizer: ${reading.fertilizerState ? "ON" : "OFF"}`);
         
-        doc.moveDown(0.5);
-        readingsOnCurrentPage++;
+        const rowData = [
+          moment(reading.timestamp).format('YYYY-MM-DD HH:mm:ss'),
+          `${reading.temperature || 'N/A'}°C`,
+          `${reading.humidity || 'N/A'}%`,
+          `${reading.moisture || 'N/A'}%`,
+          reading.moistureStatus || 'N/A'
+        ];
+        
+        currentY = drawTableRow(doc, rowData, tableX, currentY, tableWidth);
       });
-
-      // Add footer on last page
-      doc.fontSize(10).text(`Report generated on ${moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss')}`, { align: 'center' });
-
+      
+      drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
+      
       doc.end();
     } else {
       // JSON format - return all readings
@@ -633,98 +478,105 @@ app.get("/api/reports/:plantId", async (req, res) => {
   }
 });
 
-// Add helper functions after the existing helper functions and before the routes
-function drawRoundedRect(doc, x, y, width, height, radius) {
-  doc.roundedRect(x, y, width, height, radius);
-}
-
-function addGradientBackground(doc, x, y, width, height, color1, color2) {
-  const steps = 20;
-  for (let i = 0; i < steps; i++) {
-    const opacity = 0.1 - (i * 0.005);
-    doc.fillColor(color1, opacity)
-       .rect(x, y + (i * height / steps), width, height / steps)
-       .fill();
-  }
-}
-
-function createStatsCard(doc, x, y, width, height, title, value, subtitle, color) {
-  // Card background with shadow effect
-  doc.fillColor('#f8f9ff', 0.8)
-     .roundedRect(x + 2, y + 2, width, height, 8)
+// Add these helper functions after the existing helper functions
+function drawTableHeader(doc, headers, x, y, width) {
+  const cellWidth = width / headers.length;
+  
+  // Header background
+  doc.fillColor('#2e7d32')
+     .rect(x, y, width, 20)
      .fill();
-  
-  // Main card
-  doc.fillColor('#ffffff')
-     .roundedRect(x, y, width, height, 8)
-     .fill()
-     .strokeColor('#e2e8f0')
-     .lineWidth(1)
-     .stroke();
-  
-  // Colored accent bar
-  doc.fillColor(color)
-     .rect(x, y, width, 4)
-     .fill();
-  
-  // Title
-  doc.fillColor('#1a202c')
-     .font('Helvetica-Bold')
-     .fontSize(10)
-     .text(title, x + 15, y + 20, { width: width - 30 });
-  
-  // Value
-  doc.fillColor(color)
-     .font('Helvetica-Bold')
-     .fontSize(24)
-     .text(value, x + 15, y + 35, { width: width - 30 });
-  
-  // Subtitle
-  doc.fillColor('#718096')
-     .font('Helvetica')
-     .fontSize(9)
-     .text(subtitle, x + 15, y + 65, { width: width - 30 });
-}
 
-function createDataVisualization(doc, x, y, width, height, data, title) {
-  // Background
-  doc.fillColor('#ffffff')
-     .roundedRect(x, y, width, height, 8)
-     .fill()
-     .strokeColor('#e2e8f0')
-     .lineWidth(1)
-     .stroke();
-  
-  // Title
-  doc.fillColor('#2d3748')
-     .font('Helvetica-Bold')
-     .fontSize(12)
-     .text(title, x + 20, y + 15);
-  
-  // Simple bar chart representation
-  const chartY = y + 40;
-  const chartHeight = height - 60;
-  const barWidth = (width - 60) / data.length;
-  
-  data.forEach((item, index) => {
-    const barHeight = (item.value / Math.max(...data.map(d => d.value))) * chartHeight;
-    const barX = x + 20 + (index * barWidth);
-    const barY = chartY + chartHeight - barHeight;
-    
-    // Bar
-    doc.fillColor(item.color || '#4299e1')
-       .rect(barX + 5, barY, barWidth - 10, barHeight)
-       .fill();
-    
-    // Label
-    doc.fillColor('#718096')
-       .font('Helvetica')
-       .fontSize(8)
-       .text(item.label, barX, chartY + chartHeight + 5, { 
-         width: barWidth, 
-         align: 'center' 
-       });
+  // Header text
+  headers.forEach((header, i) => {
+    doc.fillColor('#ffffff')
+       .font('Helvetica-Bold')
+       .fontSize(10)
+       .text(header, 
+             x + (i * cellWidth) + 5, 
+             y + 5,
+             { width: cellWidth - 10 });
   });
+  
+  return y + 25; // Return next Y position
+}
+
+function drawTableRow(doc, data, x, y, width) {
+  const cellWidth = width / data.length;
+  
+  // Alternate row background
+  doc.fillColor('#f9f9f9', 0.5)
+     .rect(x, y, width, 20)
+     .fill();
+
+  // Row data
+  data.forEach((cell, i) => {
+    doc.fillColor('#000000')
+       .font('Helvetica')
+       .fontSize(9)
+       .text(cell.toString(), 
+             x + (i * cellWidth) + 5, 
+             y + 5,
+             { width: cellWidth - 10 });
+  });
+  
+  return y + 22; // Return next Y position
+}
+
+function drawPageHeader(doc, pageNumber, title) {
+  const pageWidth = doc.page.width;
+  
+  // Logo and title container
+  doc.rect(50, 30, pageWidth - 100, 70)
+     .fill('#f9f9f9');
+  
+  // Add logo
+  try {
+    doc.image('d:/Bayot FIles/Desktop/Server/assets/ic_new_icon.png', 60, 35, {
+      width: 50,
+      height: 50
+    });
+  } catch (error) {
+    console.warn('Warning: Logo file not found', error);
+  }
+  
+  // Title section
+  doc.font('Helvetica-Bold')
+     .fontSize(24)
+     .fillColor('#2e7d32')
+     .text('Plant Monitoring System', 120, 40)
+     .fontSize(16)
+     .fillColor('#666666')
+     .text('Detailed Report', 120, 65);
+  
+  // Page number
+  doc.fontSize(10)
+     .fillColor('#999999')
+     .text(`Page ${pageNumber}`, pageWidth - 100, 40, { align: 'right' });
+     
+  return 120; // Return Y position after header
+}
+
+function drawPageFooter(doc, timestamp) {
+  const pageWidth = doc.page.width;
+  const footerY = doc.page.height - 50;
+  
+  // Footer line
+  doc.moveTo(50, footerY)
+     .lineTo(pageWidth - 50, footerY)
+     .strokeColor('#2e7d32')
+     .strokeOpacity(0.5)
+     .stroke();
+  
+  // Footer text
+  doc.fontSize(8)
+     .fillColor('#666666')
+     .text(
+       `Generated on ${timestamp} - Plant Monitoring System`,
+       50,
+       footerY + 10,
+       { align: 'center', width: pageWidth - 100 }
+     );
 }
 
 // ==========================
