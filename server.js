@@ -117,10 +117,18 @@ async function getReadingsInRange(plantId, startDate, endDate) {
 async function getAllReadingsInRange(plantId, startDate, endDate, progressCallback = null) {
     const collection = await getCollection('sensor_data');
     
-    // Convert string dates to MongoDB Date objects
-    const start = new Date(startDate);
-    const end = new Date(endDate);
+    // Parse dates and set them to start/end of day
+    const start = moment(startDate).startOf('day').toDate();
+    const end = moment(endDate).endOf('day').toDate();
     
+    console.log('Debug - Date Range:', {
+        originalStart: startDate,
+        originalEnd: endDate,
+        parsedStart: start,
+        parsedEnd: end,
+        plantId: plantId
+    });
+
     const cursor = collection.find({
         plantId: plantId,
         timestamp: {
@@ -130,6 +138,7 @@ async function getAllReadingsInRange(plantId, startDate, endDate, progressCallba
     }).sort({ timestamp: -1 });
 
     const readings = await cursor.toArray();
+    console.log(`Debug - Found ${readings.length} readings`);
     
     if (progressCallback) {
         progressCallback(readings.length);
@@ -375,6 +384,13 @@ app.get("/api/reports/:plantId", async (req, res) => {
         example: "/api/reports/PLANT123?start=2024-01-01&end=2024-01-31&format=pdf|json"
       });
     }
+
+    console.log('Debug - Report Request:', { plantId, start, end, format });
+
+    // Verify data exists before generating report
+    const collection = await getCollection('sensor_data');
+    const count = await collection.countDocuments({ plantId });
+    console.log(`Debug - Total documents for plantId ${plantId}: ${count}`);
 
     // Set up response headers early for PDF streaming
     if (format === 'pdf') {
