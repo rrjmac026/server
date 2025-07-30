@@ -1,24 +1,12 @@
 const express = require("express");
 const cors = require("cors");
-const admin = require("firebase-admin");
+const { getCollection } = require('./db');
 require("dotenv").config();
 const PDFDocument = require("pdfkit");
 const moment = require('moment-timezone');
 
 const app = express();
 const port = process.env.PORT || 3000;
-
-// ✅ Firestore Credentials Check
-if (!process.env.FIREBASE_CREDENTIALS) {
-  console.error("❌ FIREBASE_CREDENTIALS missing! Set it in environment variables.");
-  process.exit(1);
-}
-
-// ✅ Initialize Firebase Admin
-const serviceAccount = JSON.parse(process.env.FIREBASE_CREDENTIALS);
-admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-
-const db = admin.firestore();
 
 // ✅ Middleware Setup
 app.use(cors({ origin: "*" }));
@@ -37,11 +25,12 @@ app.get("/api/health", (req, res) => {
 
 // Helper functions
 async function saveSensorData(data) {
-  const docRef = await db.collection("sensor_data").add({
-    ...data,
-    timestamp: moment().tz('Asia/Manila').toDate()
-  });
-  return docRef;
+    const collection = await getCollection('sensor_data');
+    const result = await collection.insertOne({
+        ...data,
+        timestamp: moment().tz('Asia/Manila').toDate()
+    });
+    return result;
 }
 
 function isSensorDataStale(timestamp) {
@@ -51,30 +40,26 @@ function isSensorDataStale(timestamp) {
 }
 
 async function getLatestReading(plantId) {
-  const snapshot = await db.collection("sensor_data")
-    .where("plantId", "==", plantId)
-    .orderBy("timestamp", "desc")
-    .limit(1)
-    .get();
-  
-  if (snapshot.empty) return null;
-  
-  const data = snapshot.docs[0].data();
-  const isStale = isSensorDataStale(data.timestamp.toDate());
-  
-  // Only consider data valid if it's not stale and explicitly marked as connected
-  const isConnected = !isStale && data.isConnected === true;
-  
-  return {
-    ...data,
-    timestamp: data.timestamp,
-    isConnected,
-    isOnline: isConnected,
-    moisture: isConnected ? data.moisture : 0,
-    temperature: isConnected ? data.temperature : 0,
-    humidity: isConnected ? data.humidity : 0,
-    moistureStatus: !isConnected ? "OFFLINE" : getMoistureStatus(data.moisture)
-  };
+    const collection = await getCollection('sensor_data');
+    const reading = await collection.findOne(
+        { plantId },
+        { sort: { timestamp: -1 } }
+    );
+    
+    if (!reading) return null;
+    
+    const isStale = isSensorDataStale(reading.timestamp);
+    const isConnected = !isStale && reading.isConnected === true;
+    
+    return {
+        ...reading,
+        isConnected,
+        isOnline: isConnected,
+        moisture: isConnected ? reading.moisture : 0,
+        temperature: isConnected ? reading.temperature : 0,
+        humidity: isConnected ? reading.humidity : 0,
+        moistureStatus: !isConnected ? "OFFLINE" : getMoistureStatus(reading.moisture)
+    };
 }
 
 // Function to determine moisture status
@@ -90,58 +75,37 @@ function getMoistureStatus(moisture) {
 
 // Add new helper functions
 async function getReadingsInRange(plantId, startDate, endDate) {
-  const snapshot = await db.collection("sensor_data")
-    .where("plantId", "==", plantId)
-    .where("timestamp", ">=", admin.firestore.Timestamp.fromDate(new Date(startDate)))
-    .where("timestamp", "<=", admin.firestore.Timestamp.fromDate(new Date(endDate)))
-    .orderBy("timestamp", "desc")
-    .get();
+  const collection = await getCollection('sensor_data');
+  
+  const readings = await collection.find({
+    plantId,
+    timestamp: {
+      $gte: new Date(startDate),
+      $lte: new Date(endDate)
+    }
+  }).sort({ timestamp: -1 }).toArray();
 
-  return snapshot.docs.map(doc => ({
-    ...doc.data(),
-    id: doc.id,
-    timestamp: doc.data().timestamp.toDate()
-  }));
+  return readings;
 }
 
 async function getAllReadingsInRange(plantId, startDate, endDate, progressCallback = null) {
-  const readings = [];
-  let lastDoc = null;
-  const batchSize = 500; // Adjust based on your needs
-  
-  while (true) {
-    let query = db.collection("sensor_data")
-      .where("plantId", "==", plantId)
-      .where("timestamp", ">=", admin.firestore.Timestamp.fromDate(new Date(startDate)))
-      .where("timestamp", "<=", admin.firestore.Timestamp.fromDate(new Date(endDate)))
-      .orderBy("timestamp", "desc")
-      .limit(batchSize);
-
-    if (lastDoc) {
-      query = query.startAfter(lastDoc);
-    }
-
-    const snapshot = await query.get();
+    const collection = await getCollection('sensor_data');
     
-    if (snapshot.empty) break;
+    const cursor = collection.find({
+        plantId,
+        timestamp: {
+            $gte: new Date(startDate),
+            $lte: new Date(endDate)
+        }
+    }).sort({ timestamp: -1 });
 
-    const batch = snapshot.docs.map(doc => ({
-      ...doc.data(),
-      id: doc.id,
-      timestamp: doc.data().timestamp.toDate()
-    }));
+    const readings = await cursor.toArray();
     
-    readings.push(...batch);
-    lastDoc = snapshot.docs[snapshot.docs.length - 1];
-
     if (progressCallback) {
-      progressCallback(readings.length);
+        progressCallback(readings.length);
     }
-
-    if (snapshot.docs.length < batchSize) break;
-  }
-
-  return readings;
+    
+    return readings;
 }
 
 function calculateStats(readings) {
@@ -180,8 +144,8 @@ app.post("/api/sensor-data", async (req, res) => {
     data.moistureStatus = getMoistureStatus(data.moisture);
 
     // Save to Firestore
-    const savedDoc = await saveSensorData(data);
-    res.status(201).json({ message: "Sensor data saved", id: savedDoc.id });
+    const result = await saveSensorData(data);
+    res.status(201).json({ message: "Sensor data saved", id: result.insertedId });
   } catch (error) {
     console.error("❌ Error saving sensor data:", error.message);
     res.status(500).json({ error: "Failed to save sensor data" });
@@ -489,18 +453,17 @@ app.get("/api/reports/:plantId", async (req, res) => {
 
 // Create audit log
 app.post('/api/audit-logs', async (req, res) => {
-  try {
-    const logData = {
-      ...req.body,
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
-    };
-    
-    await db.collection('audit_logs').add(logData);
-    res.status(201).json({ message: 'Audit log created' });
-  } catch (error) {
-    console.error('❌ Error creating audit log:', error);
-    res.status(500).json({ error: 'Failed to create audit log' });
-  }
+    try {
+        const collection = await getCollection('audit_logs');
+        const result = await collection.insertOne({
+            ...req.body,
+            timestamp: new Date()
+        });
+        res.status(201).json({ message: 'Audit log created', id: result.insertedId });
+    } catch (error) {
+        console.error('❌ Error creating audit log:', error);
+        res.status(500).json({ error: 'Failed to create audit log' });
+    }
 });
 
 // Get audit logs with filtering
