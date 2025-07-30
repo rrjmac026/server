@@ -117,11 +117,15 @@ async function getReadingsInRange(plantId, startDate, endDate) {
 async function getAllReadingsInRange(plantId, startDate, endDate, progressCallback = null) {
     const collection = await getCollection('sensor_data');
     
+    // Convert string dates to MongoDB Date objects
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    
     const cursor = collection.find({
-        plantId,
+        plantId: plantId,
         timestamp: {
-            $gte: new Date(startDate),
-            $lte: new Date(endDate)
+            $gte: start,
+            $lte: end
         }
     }).sort({ timestamp: -1 });
 
@@ -131,7 +135,10 @@ async function getAllReadingsInRange(plantId, startDate, endDate, progressCallba
         progressCallback(readings.length);
     }
     
-    return readings;
+    return readings.map(reading => ({
+        ...reading,
+        timestamp: reading.timestamp instanceof Date ? reading.timestamp : new Date(reading.timestamp)
+    }));
 }
 
 function calculateStats(readings) {
@@ -269,7 +276,7 @@ app.get("/api/reports", async (req, res) => {
       });
     }
 
-    // Set up response headers early for PDF streaming
+    // Set up PDF response
     if (format === 'pdf') {
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename=plant-report-${plantId}.pdf`);
@@ -277,89 +284,80 @@ app.get("/api/reports", async (req, res) => {
       const doc = new PDFDocument();
       doc.pipe(res);
 
-      // Start writing the PDF header
       doc.fontSize(24).text('Plant Monitoring Report', { align: 'center' });
       doc.moveDown();
       doc.fontSize(12)
-        .text(`Plant ID: ${plantId}`)
-        .text(`Report Period: ${moment(start).tz('Asia/Manila').format('YYYY-MM-DD LT')} to ${moment(end).tz('Asia/Manila').format('YYYY-MM-DD LT')}`);
+          .text(`Plant ID: ${plantId}`)
+          .text(`Report Period: ${moment(start).format('YYYY-MM-DD HH:mm')} to ${moment(end).format('YYYY-MM-DD HH:mm')}`);
       doc.moveDown();
-      
-      let totalReadings = 0;
-      let stats = {
-        totalTemperature: 0,
-        totalHumidity: 0,
-        totalMoisture: 0,
-        moistureStatus: { dry: 0, humid: 0, wet: 0 },
-        waterStateCount: 0,
-        fertilizerStateCount: 0
-      };
 
-      // Use pagination with progress updates
-      await getAllReadingsInRange(plantId, start, end, (count) => {
-        totalReadings = count;
-        doc.fontSize(12).text(`Processing... ${count} readings found`, { color: 'blue' });
-      });
-
-      // Fetch all readings with progress tracking
+      // Fetch readings first
       const readings = await getAllReadingsInRange(plantId, start, end);
       
-      if (readings.length === 0) {
-        doc.fontSize(12).text('No data found for the specified period.');
-        doc.end();
-        return;
+      if (!readings || readings.length === 0) {
+          doc.fontSize(12).text('No data found for the specified period.');
+          doc.end();
+          return;
       }
 
-      // Calculate final statistics
+      // Calculate statistics
+      let stats = {
+          totalTemperature: 0,
+          totalHumidity: 0,
+          totalMoisture: 0,
+          moistureStatus: { dry: 0, humid: 0, wet: 0 },
+          waterStateCount: 0,
+          fertilizerStateCount: 0
+      };
+
       readings.forEach(reading => {
-        stats.totalTemperature += reading.temperature || 0;
-        stats.totalHumidity += reading.humidity || 0;
-        stats.totalMoisture += reading.moisture || 0;
-        stats.moistureStatus[reading.moistureStatus.toLowerCase()]++;
-        stats.waterStateCount += reading.waterState ? 1 : 0;
-        stats.fertilizerStateCount += reading.fertilizerState ? 1 : 0;
+          stats.totalTemperature += parseFloat(reading.temperature) || 0;
+          stats.totalHumidity += parseFloat(reading.humidity) || 0;
+          stats.totalMoisture += parseFloat(reading.moisture) || 0;
+          if (reading.moistureStatus) {
+              const status = reading.moistureStatus.toLowerCase();
+              stats.moistureStatus[status] = (stats.moistureStatus[status] || 0) + 1;
+          }
+          stats.waterStateCount += reading.waterState ? 1 : 0;
+          stats.fertilizerStateCount += reading.fertilizerState ? 1 : 0;
       });
 
       // Write statistics
       doc.fontSize(14).text('Statistics:', { underline: true });
       doc.fontSize(12)
-        .text(`Total Readings: ${readings.length}`)
-        .text(`Average Temperature: ${(stats.totalTemperature / readings.length).toFixed(2)}°C`)
-        .text(`Average Humidity: ${(stats.totalHumidity / readings.length).toFixed(2)}%`)
-        .text(`Average Moisture: ${(stats.totalMoisture / readings.length).toFixed(2)}%`)
-        .text(`Water System Activations: ${stats.waterStateCount}`)
-        .text(`Fertilizer System Activations: ${stats.fertilizerStateCount}`);
+          .text(`Total Readings: ${readings.length}`)
+          .text(`Average Temperature: ${(stats.totalTemperature / readings.length).toFixed(2)}°C`)
+          .text(`Average Humidity: ${(stats.totalHumidity / readings.length).toFixed(2)}%`)
+          .text(`Average Moisture: ${(stats.totalMoisture / readings.length).toFixed(2)}%`);
       doc.moveDown();
 
-      // Write recent readings (last 10)
+      // Write recent readings
       doc.fontSize(14).text('Recent Readings:', { underline: true });
       readings.slice(0, 10).forEach(reading => {
-        doc.fontSize(12)
-          .text(`Time: ${moment(reading.timestamp).tz('Asia/Manila').format('YYYY-MM-DD LT')}`)
-          .text(`Temperature: ${reading.temperature}°C`)
-          .text(`Humidity: ${reading.humidity}%`)
-          .text(`Moisture: ${reading.moisture}%`)
-          .text(`Status: ${reading.moistureStatus}`)
-          .text(`Water: ${reading.waterState ? "ON" : "OFF"}`)
-          .text(`Fertilizer: ${reading.fertilizerState ? "ON" : "OFF"}`);
-        doc.moveDown();
+          doc.fontSize(12)
+              .text(`Time: ${moment(reading.timestamp).format('YYYY-MM-DD HH:mm:ss')}`)
+              .text(`Temperature: ${reading.temperature}°C`)
+              .text(`Humidity: ${reading.humidity}%`)
+              .text(`Moisture: ${reading.moisture}%`)
+              .text(`Status: ${reading.moistureStatus}`);
+          doc.moveDown();
       });
 
       doc.end();
     } else {
-      // For JSON format, return paginated data with stats
+      // JSON format
       const readings = await getAllReadingsInRange(plantId, start, end);
       const stats = calculateStats(readings);
       res.json({ 
-        totalReadings: readings.length,
-        stats,
-        recentReadings: readings.slice(0, 10) // Only send recent readings in JSON
+          totalReadings: readings.length,
+          stats,
+          recentReadings: readings.slice(0, 10)
       });
     }
 
   } catch (error) {
     console.error("❌ Report generation error:", error);
-    res.status(500).json({ error: "Failed to generate report" });
+    res.status(500).json({ error: "Failed to generate report", details: error.message });
   }
 });
 
