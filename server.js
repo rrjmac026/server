@@ -338,7 +338,7 @@ app.get("/api/reports", async (req, res) => {
       currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
       
       readings.forEach((reading, index) => {
-        if (!currentY || currentY > doc.page.height - 70) {
+        if (!currentY || currentY > doc.page.height - 90) { // Increased margin for footer
           // Add footer to current page if it's not the first page
           if (currentY) {
             drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
@@ -463,7 +463,7 @@ app.get("/api/reports/:plantId", async (req, res) => {
       currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
       
       readings.forEach((reading, index) => {
-        if (!currentY || currentY > doc.page.height - 70) {
+        if (!currentY || currentY > doc.page.height - 90) { // Increased margin for footer
           // Add footer to current page if it's not the first page
           if (currentY) {
             drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
@@ -545,9 +545,10 @@ function drawTableHeader(doc, headers, x, y, width) {
 
 function drawTableRow(doc, data, x, y, width) {
   const cellWidth = width / data.length;
+  const FOOTER_SPACE = 50; // Reserve space for footer
   
   // Check if we need a new page (including space for footer)
-  if (y > doc.page.height - 50) {
+  if (y > doc.page.height - FOOTER_SPACE) {
     return false;  // Signal that we need a new page
   }
   
@@ -606,7 +607,14 @@ function drawPageHeader(doc, pageNumber, title) {
 
 function drawPageFooter(doc, timestamp) {
   const pageWidth = doc.page.width;
-  const footerY = doc.page.height - 30;  // Moved up slightly
+  const footerY = doc.page.height - 40;  // Moved up for more space
+  
+  // Save graphics state
+  doc.save();
+  
+  // Clear any existing content in footer area
+  doc.rect(0, footerY - 10, pageWidth, 50)
+     .fill('#ffffff');
   
   // Footer line
   doc.moveTo(50, footerY)
@@ -621,9 +629,12 @@ function drawPageFooter(doc, timestamp) {
      .text(
        `Generated on ${timestamp} - Plant Monitoring System`,
        50,
-       footerY + 5,  // Adjusted position
+       footerY + 10,
        { align: 'center', width: pageWidth - 100 }
      );
+  
+  // Restore graphics state
+  doc.restore();
 }
 
 // ==========================
