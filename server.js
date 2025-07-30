@@ -371,7 +371,7 @@ app.get("/api/reports", async (req, res) => {
 });
 
 // ==========================
-// ✅ PDF Report Endpoint (with URL params)
+// ✅ PDF Report Endpoint (with URL params) - FIXED VERSION
 // ==========================
 app.get("/api/reports/:plantId", async (req, res) => {
   try {
@@ -387,28 +387,33 @@ app.get("/api/reports/:plantId", async (req, res) => {
 
     console.log('Debug - Report Request:', { plantId, start, end, format });
 
-    // Verify data exists before generating report
-    const collection = await getCollection('sensor_data');
-    const count = await collection.countDocuments({ plantId });
-    console.log(`Debug - Total documents for plantId ${plantId}: ${count}`);
+    // Fetch all readings first
+    const readings = await getAllReadingsInRange(plantId, start, end);
+    console.log(`Debug - Total readings found: ${readings.length}`);
 
-    // Set up response headers early for PDF streaming
     if (format === 'pdf') {
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename=plant-report-${plantId}.pdf`);
       
-      const doc = new PDFDocument();
+      const doc = new PDFDocument({ margin: 50 });
       doc.pipe(res);
 
-      // Start writing the PDF header
-      doc.fontSize(24).text('Plant Monitoring Report', { align: 'center' });
+      // PDF Header
+      doc.fontSize(20).text('Plant Monitoring Report', { align: 'center' });
       doc.moveDown();
       doc.fontSize(12)
         .text(`Plant ID: ${plantId}`)
-        .text(`Report Period: ${moment(start).tz('Asia/Manila').format('YYYY-MM-DD LT')} to ${moment(end).tz('Asia/Manila').format('YYYY-MM-DD LT')}`);
+        .text(`Report Period: ${moment(start).tz('Asia/Manila').format('YYYY-MM-DD LT')} to ${moment(end).tz('Asia/Manila').format('YYYY-MM-DD LT')}`)
+        .text(`Generated: ${moment().tz('Asia/Manila').format('YYYY-MM-DD LT')}`);
       doc.moveDown();
       
-      let totalReadings = 0;
+      if (readings.length === 0) {
+        doc.fontSize(12).text('No data found for the specified period.');
+        doc.end();
+        return;
+      }
+
+      // Calculate statistics
       let stats = {
         totalTemperature: 0,
         totalHumidity: 0,
@@ -418,33 +423,18 @@ app.get("/api/reports/:plantId", async (req, res) => {
         fertilizerStateCount: 0
       };
 
-      // Use pagination with progress updates
-      await getAllReadingsInRange(plantId, start, end, (count) => {
-        totalReadings = count;
-        doc.fontSize(12).text(`Processing... ${count} readings found`, { color: 'blue' });
-      });
-
-      // Fetch all readings with progress tracking
-      const readings = await getAllReadingsInRange(plantId, start, end);
-      
-      if (readings.length === 0) {
-        doc.fontSize(12).text('No data found for the specified period.');
-        doc.end();
-        return;
-      }
-
-      // Calculate final statistics
       readings.forEach(reading => {
         stats.totalTemperature += reading.temperature || 0;
         stats.totalHumidity += reading.humidity || 0;
         stats.totalMoisture += reading.moisture || 0;
-        stats.moistureStatus[reading.moistureStatus.toLowerCase()]++;
+        const status = (reading.moistureStatus || 'unknown').toLowerCase();
+        stats.moistureStatus[status] = (stats.moistureStatus[status] || 0) + 1;
         stats.waterStateCount += reading.waterState ? 1 : 0;
         stats.fertilizerStateCount += reading.fertilizerState ? 1 : 0;
       });
 
       // Write statistics
-      doc.fontSize(14).text('Statistics:', { underline: true });
+      doc.fontSize(16).text('Summary Statistics:', { underline: true });
       doc.fontSize(12)
         .text(`Total Readings: ${readings.length}`)
         .text(`Average Temperature: ${(stats.totalTemperature / readings.length).toFixed(2)}°C`)
@@ -452,53 +442,58 @@ app.get("/api/reports/:plantId", async (req, res) => {
         .text(`Average Moisture: ${(stats.totalMoisture / readings.length).toFixed(2)}%`)
         .text(`Water System Activations: ${stats.waterStateCount}`)
         .text(`Fertilizer System Activations: ${stats.fertilizerStateCount}`);
+      doc.moveDown(2);
+
+      // Write ALL readings
+      doc.fontSize(16).text('All Sensor Readings:', { underline: true });
       doc.moveDown();
 
-      // Write ALL readings section
-      doc.fontSize(14).text('All Sensor Readings:', { underline: true });
-      doc.moveDown();
-
-      const PAGE_MARGIN = 50;
-      const PAGE_HEIGHT = doc.page.height - PAGE_MARGIN;
-      const ENTRY_HEIGHT = 140; // Approximate height of each reading entry
-      const itemsPerPage = Math.floor((PAGE_HEIGHT - PAGE_MARGIN) / ENTRY_HEIGHT);
-      const totalPages = Math.ceil(readings.length / itemsPerPage);
+      // Constants for pagination
+      const READING_HEIGHT = 85; // Height needed for each reading entry
+      const BOTTOM_MARGIN = 100; // Space to leave at bottom of page
+      let currentPage = 1;
+      let readingsOnCurrentPage = 0;
 
       readings.forEach((reading, index) => {
         // Check if we need a new page
-        if (doc.y > PAGE_HEIGHT - ENTRY_HEIGHT || index % itemsPerPage === 0) {
-          if (index > 0) doc.addPage();
-          doc.fontSize(12).text(`Page ${Math.floor(index/itemsPerPage) + 1} of ${totalPages}`, { align: 'right' });
+        if (doc.y > (doc.page.height - BOTTOM_MARGIN - READING_HEIGHT)) {
+          doc.addPage();
+          currentPage++;
+          readingsOnCurrentPage = 0;
+          
+          // Add page header
+          doc.fontSize(10).text(`Page ${currentPage} - Plant Monitoring Report`, { align: 'right' });
           doc.moveDown();
         }
 
-        // Write reading data
-        doc.fontSize(12)
-          .text(`Time: ${moment(reading.timestamp).tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss')}`)
-          .text(`Temperature: ${reading.temperature}°C`)
-          .text(`Humidity: ${reading.humidity}%`)
-          .text(`Moisture: ${reading.moisture}%`)
-          .text(`Status: ${reading.moistureStatus}`)
-          .text(`Water: ${reading.waterState ? "ON" : "OFF"}`)
-          .text(`Fertilizer: ${reading.fertilizerState ? "ON" : "OFF"}`);
-        doc.moveDown();
+        // Write reading data with better formatting
+        doc.fontSize(11)
+          .text(`Reading ${index + 1} - ${moment(reading.timestamp).tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss')}`, { underline: true })
+          .fontSize(10)
+          .text(`Temperature: ${reading.temperature || 'N/A'}°C | Humidity: ${reading.humidity || 'N/A'}% | Moisture: ${reading.moisture || 'N/A'}%`)
+          .text(`Status: ${reading.moistureStatus || 'N/A'} | Water: ${reading.waterState ? "ON" : "OFF"} | Fertilizer: ${reading.fertilizerState ? "ON" : "OFF"}`);
+        
+        doc.moveDown(0.5);
+        readingsOnCurrentPage++;
       });
+
+      // Add footer on last page
+      doc.fontSize(10).text(`Report generated on ${moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss')}`, { align: 'center' });
 
       doc.end();
     } else {
-      // For JSON format
-      const readings = await getAllReadingsInRange(plantId, start, end);
+      // JSON format - return all readings
       const stats = calculateStats(readings);
       res.json({ 
         totalReadings: readings.length,
         stats,
-        allReadings: readings // Return all readings in JSON format
+        allReadings: readings
       });
     }
 
   } catch (error) {
     console.error("❌ Report generation error:", error);
-    res.status(500).json({ error: "Failed to generate report" });
+    res.status(500).json({ error: "Failed to generate report", details: error.message });
   }
 });
 
