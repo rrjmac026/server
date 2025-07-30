@@ -298,15 +298,71 @@ app.get("/api/reports", async (req, res) => {
       const doc = new PDFDocument({ margin: 50 });
       doc.pipe(res);
 
-      // PDF Header
-      doc.fontSize(20).text('Plant Monitoring Report', { align: 'center' });
-      doc.moveDown();
-      doc.fontSize(12)
-        .text(`Plant ID: ${plantId}`)
-        .text(`Report Period: ${moment(start).tz('Asia/Manila').format('YYYY-MM-DD LT')} to ${moment(end).tz('Asia/Manila').format('YYYY-MM-DD LT')}`)
-        .text(`Generated: ${moment().tz('Asia/Manila').format('YYYY-MM-DD LT')}`);
-      doc.moveDown();
+      // Enhanced PDF Header with Logo
+      try {
+        // Add logo
+        doc.image('d:/Bayot FIles/Desktop/Server/assets/ic_new_icon.png', 50, 45, {
+          width: 50,
+          height: 50
+        });
+      } catch (error) {
+        console.warn('Warning: Logo file not found', error);
+      }
+
+      // Header Design
+      doc.font('Helvetica-Bold')
+         .fontSize(24)
+         .text('Plant Monitoring System', 120, 50)
+         .fontSize(16)
+         .text('Detailed Report', 120, 75);
+
+      // Add decorative line
+      doc.moveTo(50, 110)
+         .lineTo(550, 110)
+         .strokeColor('#2e7d32')
+         .lineWidth(2)
+         .stroke();
+
+      // Report Details with better formatting
+      doc.moveDown(2)
+         .font('Helvetica')
+         .fontSize(12)
+         .fillColor('#000000');
+
+      // Create a table-like structure for report details
+      const startX = 50;
+      let startY = doc.y;
       
+      // Left column
+      doc.text('Plant ID:', startX, startY)
+         .font('Helvetica-Bold')
+         .text(plantId, startX + 100, startY)
+         .font('Helvetica');
+
+      // Right column
+      doc.text('Generated:', 300, startY)
+         .font('Helvetica-Bold')
+         .text(moment().tz('Asia/Manila').format('YYYY-MM-DD LT'), 380, startY)
+         .font('Helvetica');
+
+      // Second row
+      startY += 25;
+      doc.text('Period:', startX, startY)
+         .font('Helvetica-Bold')
+         .text(`${moment(start).tz('Asia/Manila').format('YYYY-MM-DD')} to ${moment(end).tz('Asia/Manila').format('YYYY-MM-DD')}`, 
+               startX + 100, startY)
+         .font('Helvetica');
+
+      // Add another decorative line
+      doc.moveDown(2)
+         .moveTo(50, doc.y)
+         .lineTo(550, doc.y)
+         .strokeColor('#2e7d32')
+         .lineWidth(1)
+         .stroke()
+         .moveDown();
+
+      // Rest of your PDF generation code...
       if (readings.length === 0) {
         doc.fontSize(12).text('No data found for the specified period.');
         doc.end();
@@ -422,15 +478,71 @@ app.get("/api/reports/:plantId", async (req, res) => {
       const doc = new PDFDocument({ margin: 50 });
       doc.pipe(res);
 
-      // PDF Header
-      doc.fontSize(20).text('Plant Monitoring Report', { align: 'center' });
-      doc.moveDown();
-      doc.fontSize(12)
-        .text(`Plant ID: ${plantId}`)
-        .text(`Report Period: ${moment(start).tz('Asia/Manila').format('YYYY-MM-DD LT')} to ${moment(end).tz('Asia/Manila').format('YYYY-MM-DD LT')}`)
-        .text(`Generated: ${moment().tz('Asia/Manila').format('YYYY-MM-DD LT')}`);
-      doc.moveDown();
+      // Enhanced PDF Header with Logo
+      try {
+        // Add logo
+        doc.image('d:/Bayot FIles/Desktop/Server/assets/ic_new_icon.png', 50, 45, {
+          width: 50,
+          height: 50
+        });
+      } catch (error) {
+        console.warn('Warning: Logo file not found', error);
+      }
+
+      // Header Design
+      doc.font('Helvetica-Bold')
+         .fontSize(24)
+         .text('Plant Monitoring System', 120, 50)
+         .fontSize(16)
+         .text('Detailed Report', 120, 75);
+
+      // Add decorative line
+      doc.moveTo(50, 110)
+         .lineTo(550, 110)
+         .strokeColor('#2e7d32')
+         .lineWidth(2)
+         .stroke();
+
+      // Report Details with better formatting
+      doc.moveDown(2)
+         .font('Helvetica')
+         .fontSize(12)
+         .fillColor('#000000');
+
+      // Create a table-like structure for report details
+      const startX = 50;
+      let startY = doc.y;
       
+      // Left column
+      doc.text('Plant ID:', startX, startY)
+         .font('Helvetica-Bold')
+         .text(plantId, startX + 100, startY)
+         .font('Helvetica');
+
+      // Right column
+      doc.text('Generated:', 300, startY)
+         .font('Helvetica-Bold')
+         .text(moment().tz('Asia/Manila').format('YYYY-MM-DD LT'), 380, startY)
+         .font('Helvetica');
+
+      // Second row
+      startY += 25;
+      doc.text('Period:', startX, startY)
+         .font('Helvetica-Bold')
+         .text(`${moment(start).tz('Asia/Manila').format('YYYY-MM-DD')} to ${moment(end).tz('Asia/Manila').format('YYYY-MM-DD')}`, 
+               startX + 100, startY)
+         .font('Helvetica');
+
+      // Add another decorative line
+      doc.moveDown(2)
+         .moveTo(50, doc.y)
+         .lineTo(550, doc.y)
+         .strokeColor('#2e7d32')
+         .lineWidth(1)
+         .stroke()
+         .moveDown();
+
+      // Rest of your PDF generation code...
       if (readings.length === 0) {
         doc.fontSize(12).text('No data found for the specified period.');
         doc.end();
