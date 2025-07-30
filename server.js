@@ -633,7 +633,100 @@ app.get("/api/reports/:plantId", async (req, res) => {
   }
 });
 
-// Add after the helper functions section
+// Add helper functions after the existing helper functions and before the routes
+function drawRoundedRect(doc, x, y, width, height, radius) {
+  doc.roundedRect(x, y, width, height, radius);
+}
+
+function addGradientBackground(doc, x, y, width, height, color1, color2) {
+  const steps = 20;
+  for (let i = 0; i < steps; i++) {
+    const opacity = 0.1 - (i * 0.005);
+    doc.fillColor(color1, opacity)
+       .rect(x, y + (i * height / steps), width, height / steps)
+       .fill();
+  }
+}
+
+function createStatsCard(doc, x, y, width, height, title, value, subtitle, color) {
+  // Card background with shadow effect
+  doc.fillColor('#f8f9ff', 0.8)
+     .roundedRect(x + 2, y + 2, width, height, 8)
+     .fill();
+  
+  // Main card
+  doc.fillColor('#ffffff')
+     .roundedRect(x, y, width, height, 8)
+     .fill()
+     .strokeColor('#e2e8f0')
+     .lineWidth(1)
+     .stroke();
+  
+  // Colored accent bar
+  doc.fillColor(color)
+     .rect(x, y, width, 4)
+     .fill();
+  
+  // Title
+  doc.fillColor('#1a202c')
+     .font('Helvetica-Bold')
+     .fontSize(10)
+     .text(title, x + 15, y + 20, { width: width - 30 });
+  
+  // Value
+  doc.fillColor(color)
+     .font('Helvetica-Bold')
+     .fontSize(24)
+     .text(value, x + 15, y + 35, { width: width - 30 });
+  
+  // Subtitle
+  doc.fillColor('#718096')
+     .font('Helvetica')
+     .fontSize(9)
+     .text(subtitle, x + 15, y + 65, { width: width - 30 });
+}
+
+function createDataVisualization(doc, x, y, width, height, data, title) {
+  // Background
+  doc.fillColor('#ffffff')
+     .roundedRect(x, y, width, height, 8)
+     .fill()
+     .strokeColor('#e2e8f0')
+     .lineWidth(1)
+     .stroke();
+  
+  // Title
+  doc.fillColor('#2d3748')
+     .font('Helvetica-Bold')
+     .fontSize(12)
+     .text(title, x + 20, y + 15);
+  
+  // Simple bar chart representation
+  const chartY = y + 40;
+  const chartHeight = height - 60;
+  const barWidth = (width - 60) / data.length;
+  
+  data.forEach((item, index) => {
+    const barHeight = (item.value / Math.max(...data.map(d => d.value))) * chartHeight;
+    const barX = x + 20 + (index * barWidth);
+    const barY = chartY + chartHeight - barHeight;
+    
+    // Bar
+    doc.fillColor(item.color || '#4299e1')
+       .rect(barX + 5, barY, barWidth - 10, barHeight)
+       .fill();
+    
+    // Label
+    doc.fillColor('#718096')
+       .font('Helvetica')
+       .fontSize(8)
+       .text(item.label, barX, chartY + chartHeight + 5, { 
+         width: barWidth, 
+         align: 'center' 
+       });
+  });
+}
+
 // ==========================
 // ✅ Audit Logs Endpoints
 // ==========================
