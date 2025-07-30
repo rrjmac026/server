@@ -1,6 +1,32 @@
+require('dotenv').config();
+const { MongoClient } = require('mongodb');
+
+if (!process.env.MONGODB_URI) {
+    throw new Error('Please define MONGODB_URI in your environment');
+}
+
+let client;
+let db;
+
+async function connectToDatabase() {
+    if (db) return db;
+
+    if (!client) {
+        client = new MongoClient(process.env.MONGODB_URI);
+        await client.connect();
+    }
+    
+    db = client.db(process.env.MONGODB_DB_NAME || 'plantmonitoringdb');
+    return db;
+}
+
+const getCollection = async (collection) => {
+    const db = await connectToDatabase();
+    return db.collection(collection);
+};
+
 const express = require("express");
 const cors = require("cors");
-const { getCollection } = require('./db');
 require("dotenv").config();
 const PDFDocument = require("pdfkit");
 const moment = require('moment-timezone');
@@ -36,7 +62,7 @@ async function saveSensorData(data) {
 function isSensorDataStale(timestamp) {
   const now = moment();
   const readingTime = moment(timestamp);
-  return now.diff(readingTime, 'seconds') > 35;  // Changed to 35 seconds (30s ESP32 interval + 5s buffer)
+  return now.diff(readingTime, 'seconds') > 40;  // Changed to 35 seconds (30s ESP32 interval + 5s buffer)
 }
 
 async function getLatestReading(plantId) {
