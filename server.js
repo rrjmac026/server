@@ -468,15 +468,44 @@ app.get("/api/reports/:plantId", async (req, res) => {
         doc.moveDown();
       });
 
+      // Write ALL readings in groups of 25
+      doc.fontSize(14).text('All Sensor Readings:', { underline: true });
+      doc.moveDown();
+
+      // Group readings into pages of 25
+      for (let i = 0; i < readings.length; i += 25) {
+        const pageReadings = readings.slice(i, i + 25);
+        
+        doc.fontSize(12).text(`Page ${Math.floor(i/25) + 1} of ${Math.ceil(readings.length/25)}`, { align: 'right' });
+        doc.moveDown();
+
+        pageReadings.forEach(reading => {
+          doc.fontSize(12)
+            .text(`Time: ${moment(reading.timestamp).tz('Asia/Manila').format('YYYY-MM-DD LT')}`)
+            .text(`Temperature: ${reading.temperature}°C`)
+            .text(`Humidity: ${reading.humidity}%`)
+            .text(`Moisture: ${reading.moisture}%`)
+            .text(`Status: ${reading.moistureStatus}`)
+            .text(`Water: ${reading.waterState ? "ON" : "OFF"}`)
+            .text(`Fertilizer: ${reading.fertilizerState ? "ON" : "OFF"}`);
+          doc.moveDown();
+        });
+
+        // Add a page break if not the last group
+        if (i + 25 < readings.length) {
+          doc.addPage();
+        }
+      }
+
       doc.end();
     } else {
-      // For JSON format, return paginated data with stats
+      // For JSON format, return all readings
       const readings = await getAllReadingsInRange(plantId, start, end);
       const stats = calculateStats(readings);
       res.json({ 
         totalReadings: readings.length,
         stats,
-        recentReadings: readings.slice(0, 10) // Only send recent readings in JSON
+        allReadings: readings // Changed from recentReadings to include all
       });
     }
 
