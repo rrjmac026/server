@@ -755,23 +755,16 @@ function validateScheduleData(data) {
 // Create a new schedule
 app.post('/api/schedules', async (req, res) => {
   try {
-    const scheduleData = req.body;
+    const collection = await getCollection('schedules');
+    const scheduleData = {
+      ...req.body,
+      createdAt: new Date()
+    };
     
-    // Validate schedule data
-    const validationError = validateScheduleData(scheduleData);
-    if (validationError) {
-      return res.status(400).json({ error: validationError });
-    }
-    
-    // Add timestamp
-    scheduleData.createdAt = admin.firestore.FieldValue.serverTimestamp();
-    
-    // Save to Firestore
-    const docRef = await db.collection('schedules').add(scheduleData);
-    
+    const result = await collection.insertOne(scheduleData);
     res.status(201).json({ 
       success: true, 
-      id: docRef.id,
+      id: result.insertedId,
       schedule: scheduleData 
     });
   } catch (error) {
@@ -784,25 +777,20 @@ app.post('/api/schedules', async (req, res) => {
 app.get('/api/schedules/:plantId', async (req, res) => {
   try {
     const { plantId } = req.params;
-    const { enabled } = req.query; // Optional query parameter to filter by enabled status
+    const { enabled } = req.query;
+    const collection = await getCollection('schedules');
     
-    // Create base query
-    let query = db.collection('schedules').where('plantId', '==', plantId);
-    
-    // Add enabled filter if specified
+    // Build query
+    let query = { plantId };
     if (enabled !== undefined) {
-      const enabledBool = enabled === 'true';
-      query = query.where('enabled', '==', enabledBool);
+      query.enabled = enabled === 'true';
     }
     
-    // Add ordering
-    const schedulesSnapshot = await query.orderBy('createdAt', 'desc').get();
-
-    const schedules = schedulesSnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data(),
-      createdAt: doc.data().createdAt ? doc.data().createdAt.toDate() : null
-    }));
+    // Add sorting
+    const schedules = await collection
+      .find(query)
+      .sort({ createdAt: -1 })
+      .toArray();
 
     res.json({ schedules });
   } catch (error) {
@@ -815,18 +803,22 @@ app.get('/api/schedules/:plantId', async (req, res) => {
 app.put('/api/schedules/:scheduleId', async (req, res) => {
   try {
     const { scheduleId } = req.params;
-    const updateData = req.body;
+    const collection = await getCollection('schedules');
+    const { ObjectId } = require('mongodb');
     
-    // Validate update data
-    if (Object.keys(updateData).length === 0) {
-      return res.status(400).json({ error: 'No update data provided' });
+    const result = await collection.updateOne(
+      { _id: new ObjectId(scheduleId) },
+      { 
+        $set: {
+          ...req.body,
+          updatedAt: new Date()
+        }
+      }
+    );
+    
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ error: 'Schedule not found' });
     }
-    
-    // Update in Firestore
-    await db.collection('schedules').doc(scheduleId).update({
-      ...updateData,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
     
     res.json({ success: true, id: scheduleId });
   } catch (error) {
@@ -839,9 +831,14 @@ app.put('/api/schedules/:scheduleId', async (req, res) => {
 app.delete('/api/schedules/:scheduleId', async (req, res) => {
   try {
     const { scheduleId } = req.params;
+    const collection = await getCollection('schedules');
+    const { ObjectId } = require('mongodb');
     
-    // Delete from Firestore
-    await db.collection('schedules').doc(scheduleId).delete();
+    const result = await collection.deleteOne({ _id: new ObjectId(scheduleId) });
+    
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: 'Schedule not found' });
+    }
     
     res.json({ success: true, id: scheduleId });
   } catch (error) {
