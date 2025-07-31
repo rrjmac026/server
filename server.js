@@ -802,23 +802,30 @@ app.get('/api/audit-logs/stats', async (req, res) => {
 app.get('/api/audit-logs/actions', async (req, res) => {
     try {
         const collection = await getCollection('audit_logs');
-        const actions = await collection.distinct('action', {
-            action: { $exists: true, $ne: null }
-        });
+        let actions = await collection.distinct('action');
+        
+        // Ensure actions is always an array and filter out invalid values
+        actions = Array.isArray(actions) ? actions : [];
+        actions = actions.filter(action => action && typeof action === 'string');
+        
+        // Sort actions alphabetically
+        actions.sort();
         
         res.json({
             success: true,
             data: {
-                actions: actions.filter(Boolean) // Remove any null/undefined/empty values
+                actions: actions
             }
         });
     } catch (error) {
         console.error('Error fetching audit log actions:', error);
-        res.status(500).json({ 
-            success: false, 
-            error: 'Failed to fetch audit log actions',
-            message: error.message,
-            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        // Return empty array instead of error to prevent client crashes
+        res.json({ 
+            success: true, 
+            data: {
+                actions: []
+            },
+            warning: 'Failed to fetch actions, returning empty list'
         });
     }
 });
