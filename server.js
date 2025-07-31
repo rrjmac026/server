@@ -794,7 +794,270 @@ app.delete('/api/schedules/:scheduleId', async (req, res) => {
 // Note: The polling endpoint for schedules has been merged with the main GET endpoint
 // Use /api/schedules/:plantId?enabled=true to get only enabled schedules
 
+// ==========================
+// ✅ Event Logging Endpoints
+// ==========================
+
+// Add after other helper functions
+async function saveEventLog(eventData) {
+    const collection = await getCollection('events');
+    return await collection.insertOne({
+        ...eventData,
+        timestamp: moment().tz('Asia/Manila').toDate()
+    });
+}
+
+// Add new endpoint for event logging
+app.post("/api/events", async (req, res) => {
+    try {
+        const eventData = req.body;
+        
+        if (!eventData.plantId || !eventData.type || !eventData.action) {
+            return res.status(400).json({ error: "Missing required event data" });
+        }
+
+        const result = await saveEventLog(eventData);
+        res.status(201).json({ message: "Event logged", id: result.insertedId });
+    } catch (error) {
+        console.error("❌ Error logging event:", error);
+        res.status(500).json({ error: "Failed to log event" });
+    }
+});
+
+// Replace existing /api/reports/:plantId endpoint
+app.get("/api/reports/:plantId", async (req, res) => {
+    try {
+        const { plantId } = req.params;
+        const { start, end, format = 'pdf' } = req.query;
+
+        if (!start || !end) {
+            return res.status(400).json({ error: "Start and end dates required" });
+        }
+
+        // Get sensor readings and events
+        const startDate = moment(start).startOf('day').toDate();
+        const endDate = moment(end).endOf('day').toDate();
+
+        const [readings, events] = await Promise.all([
+            getAllReadingsInRange(plantId, startDate, endDate),
+            getCollection('events').then(collection =>
+                collection.find({
+                    plantId,
+                    timestamp: { $gte: startDate, $lte: endDate }
+                }).toArray()
+            )
+        ]);
+
+        // Calculate statistics
+        const stats = {
+            readings: calculateReadingStats(readings),
+            watering: calculateEventStats(events, 'watering'),
+            fertilizer: calculateEventStats(events, 'fertilizer')
+        };
+
+        if (format === 'json') {
+            return res.json({
+                plantId,
+                period: { start: startDate, end: endDate },
+                stats,
+                details: {
+                    readings,
+                    events: events.map(e => ({
+                        ...e,
+                        timestamp: moment(e.timestamp).format('YYYY-MM-DD HH:mm:ss')
+                    }))
+                }
+            });
+        }
+
+        // Generate PDF report
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename=plant-report-${plantId}.pdf`);
+
+        const doc = new PDFDocument({ margin: 50 });
+        doc.pipe(res);
+
+        // Generate enhanced PDF report with events
+        generateEnhancedPDFReport(doc, {
+            plantId,
+            startDate,
+            endDate,
+            stats,
+            readings,
+            events
+        });
+
+        doc.end();
+
+    } catch (error) {
+        console.error("❌ Error generating report:", error);
+        res.status(500).json({ error: "Failed to generate report" });
+    }
+});
+
+// Add new helper functions for report generation
+function calculateReadingStats(readings) {
+    return {
+        total: readings.length,
+        averages: readings.reduce((acc, r) => ({
+            temperature: acc.temperature + (r.temperature || 0),
+            humidity: acc.humidity + (r.humidity || 0),
+            moisture: acc.moisture + (r.moisture || 0),
+            count: acc.count + 1
+        }), { temperature: 0, humidity: 0, moisture: 0, count: 0 }),
+        moistureStatus: readings.reduce((acc, r) => {
+            acc[r.moistureStatus] = (acc[r.moistureStatus] || 0) + 1;
+            return acc;
+        }, {})
+    };
+}
+
+function calculateEventStats(events, type) {
+    const typeEvents = events.filter(e => e.type === type);
+    return {
+        total: typeEvents.length,
+        byAction: typeEvents.reduce((acc, e) => {
+            acc[e.action] = (acc[e.action] || 0) + 1;
+            return acc;
+        }, {}),
+        firstEvent: typeEvents[0]?.timestamp,
+        lastEvent: typeEvents[typeEvents.length - 1]?.timestamp
+    };
+}
+
+function generateEnhancedPDFReport(doc, data) {
+    let currentY = drawPageHeader(doc, 1, 'Plant Monitoring Report');
+    currentY += 20;
+
+    // General stats summary
+    drawReportSummary(doc, data, currentY);
+    
+    // Watering and Fertilizer Logs Page
+    doc.addPage();
+    currentY = drawPageHeader(doc, 2, 'System Activity Logs');
+    
+    // Watering Events Table
+    doc.fontSize(14).text('Watering Activity Log', { underline: true });
+    currentY = doc.y + 10;
+    
+    const waterHeaders = ['Date & Time', 'Action', 'Details'];
+    const waterWidth = doc.page.width - 100;
+    currentY = drawTableHeader(doc, waterHeaders, 50, currentY, waterWidth);
+    
+    data.events
+        .filter(e => e.type === 'watering')
+        .forEach(event => {
+            const rowData = [
+                moment(event.timestamp).format('YYYY-MM-DD HH:mm:ss'),
+                event.action.toUpperCase(),
+                event.details || '-'
+            ];
+            currentY = drawTableRow(doc, rowData, 50, currentY, waterWidth);
+            
+            // Add new page if needed
+            if (currentY > doc.page.height - 100) {
+                doc.addPage();
+                currentY = drawPageHeader(doc, 3, 'System Activity Logs');
+                currentY = drawTableHeader(doc, waterHeaders, 50, currentY, waterWidth);
+            }
+        });
+
+    // Fertilizer Events Table
+    doc.addPage();
+    currentY = drawPageHeader(doc, 4, 'System Activity Logs');
+    doc.fontSize(14).text('Fertilizer Activity Log', { underline: true });
+    currentY = doc.y + 10;
+    
+    const fertHeaders = ['Date & Time', 'Action', 'Details'];
+    currentY = drawTableHeader(doc, fertHeaders, 50, currentY, waterWidth);
+    
+    data.events
+        .filter(e => e.type === 'fertilizer')
+        .forEach(event => {
+            const rowData = [
+                moment(event.timestamp).format('YYYY-MM-DD HH:mm:ss'),
+                event.action.toUpperCase(),
+                event.details || '-'
+            ];
+            currentY = drawTableRow(doc, rowData, 50, currentY, waterWidth);
+            
+            // Add new page if needed
+            if (currentY > doc.page.height - 100) {
+                doc.addPage();
+                currentY = drawPageHeader(doc, 5, 'System Activity Logs');
+                currentY = drawTableHeader(doc, fertHeaders, 50, currentY, waterWidth);
+            }
+        });
+
+    // Sensor Readings Page
+    doc.addPage();
+    currentY = drawPageHeader(doc, 6, 'Sensor Readings');
+    
+    // Add sensor readings table (existing code)
+    const readingsHeaders = ['Date & Time', 'Temperature', 'Humidity', 'Moisture', 'Status'];
+    currentY = drawTableHeader(doc, readingsHeaders, 50, currentY, waterWidth);
+    
+    readings.forEach((reading, index) => {
+        const rowData = [
+            moment(reading.timestamp).format('YYYY-MM-DD HH:mm:ss'),
+            `${reading.temperature || 'N/A'}°C`,
+            `${reading.humidity || 'N/A'}%`,
+            `${reading.moisture || 'N/A'}%`,
+            reading.moistureStatus || 'N/A'
+        ];
+        
+        currentY = drawTableRow(doc, rowData, 50, currentY, waterWidth);
+        
+        // Add new page if needed
+        if (currentY > doc.page.height - 70) {
+            doc.addPage();
+            currentY = drawPageHeader(doc, Math.floor(index / 20) + 7);
+            currentY = drawTableHeader(doc, readingsHeaders, 50, currentY, waterWidth);
+        }
+    });
+    
+    drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
+}
+
+
+// Add new helper function for report summary
+function drawReportSummary(doc, data, startY) {
+    const stats = data.stats;
+    const summaryWidth = doc.page.width - 100;
+    
+    doc.fontSize(12).text('Activity Summary', { underline: true });
+    doc.fontSize(10);
+    
+    // Watering Stats
+    doc.text(`Watering Events: ${stats.watering.total}`, 50, doc.y + 10);
+    if (stats.watering.byAction) {
+        Object.entries(stats.watering.byAction).forEach(([action, count]) => {
+            doc.text(`  - ${action}: ${count}`, 70, doc.y + 5);
+        });
+    }
+    
+    // Fertilizer Stats
+    doc.text(`Fertilizer Events: ${stats.fertilizer.total}`, 50, doc.y + 10);
+    if (stats.fertilizer.byAction) {
+        Object.entries(stats.fertilizer.byAction).forEach(([action, count]) => {
+            doc.text(`  - ${action}: ${count}`, 70, doc.y + 5);
+        });
+    }
+    
+    // Sensor Reading Stats
+    const avgTemp = stats.readings.averages.temperature / stats.readings.averages.count;
+    const avgHumidity = stats.readings.averages.humidity / stats.readings.averages.count;
+    const avgMoisture = stats.readings.averages.moisture / stats.readings.averages.count;
+    
+    doc.text('Sensor Reading Averages:', 50, doc.y + 15);
+    doc.text(`  - Temperature: ${avgTemp.toFixed(1)}°C`, 70, doc.y + 5);
+    doc.text(`  - Humidity: ${avgHumidity.toFixed(1)}%`, 70, doc.y + 5);
+    doc.text(`  - Moisture: ${avgMoisture.toFixed(1)}%`, 70, doc.y + 5);
+}
+
+// ==========================
 // ✅ Start the Server
+// ==========================
 app.listen(port, () => {
   console.log(`✅ Server started at http://localhost:${port}`);
 });
