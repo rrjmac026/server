@@ -273,11 +273,17 @@ app.get("/api/reports", async (req, res) => {
       
       // Details table background
       doc.rect(startX, currentY, reportDetailsWidth, 80) // Increased height
-         .fillColor('#f9f9f9')
+         .fillColor('#e8e8e8') // Darker background
          .fill();
       
+      // Add border to details table
+      doc.rect(startX, currentY, reportDetailsWidth, 80)
+         .strokeColor('#000000')
+         .lineWidth(1)
+         .stroke();
+      
       doc.font('Helvetica')
-         .fontSize(10)
+         .fontSize(11) // Slightly larger font
          .fillColor('#000000');
       
       // Details rows with better spacing
@@ -460,17 +466,23 @@ function drawTableHeader(doc, headers, x, y, width) {
     width * 0.145  // Fertilizer - 14.5%
   ];
   
-  // Header background
-  doc.fillColor('#2e7d32')
+  // Header background - darker color
+  doc.fillColor('#1a4e1a')
      .rect(x, y, width, 25) // Increased height
      .fill();
+
+  // Header border
+  doc.strokeColor('#000000')
+     .lineWidth(1)
+     .rect(x, y, width, 25)
+     .stroke();
 
   // Header text with proper positioning
   let currentX = x;
   headers.forEach((header, i) => {
     doc.fillColor('#ffffff')
        .font('Helvetica-Bold')
-       .fontSize(9) // Slightly smaller font
+       .fontSize(10) // Slightly larger font for better readability
        .text(header, 
              currentX + 3, // Small padding
              y + 7, // Centered vertically
@@ -498,31 +510,32 @@ function drawTableRow(doc, data, x, y, width) {
   
   const rowHeight = 22;
   
-  // Alternate row background
-  doc.fillColor('#f9f9f9', 0.3)
+  // Alternate row background - lighter but still visible
+  doc.fillColor('#f0f0f0')
      .rect(x, y, width, rowHeight)
      .fill();
 
-  // Row borders (optional - for better visual separation)
-  doc.strokeColor('#e0e0e0')
-     .lineWidth(0.5)
+  // Row borders - dark for better definition
+  doc.strokeColor('#000000')
+     .lineWidth(0.8)
      .rect(x, y, width, rowHeight)
      .stroke();
 
   // Row data with proper positioning
   let currentX = x;
   data.forEach((cell, i) => {
-    // Vertical line separators
+    // Vertical line separators - dark
     if (i > 0) {
       doc.moveTo(currentX, y)
          .lineTo(currentX, y + rowHeight)
-         .strokeColor('#e0e0e0')
+         .strokeColor('#000000')
+         .lineWidth(0.8)
          .stroke();
     }
     
-    doc.fillColor('#000000')
+    doc.fillColor('#000000') // Pure black text
        .font('Helvetica')
-       .fontSize(8) // Smaller font for better fit
+       .fontSize(9) // Slightly larger font for better readability
        .text(cell.toString(), 
              currentX + 3, // Small padding
              y + 6, // Centered vertically
@@ -540,29 +553,29 @@ function drawTableRow(doc, data, x, y, width) {
 function drawPageHeader(doc, pageNumber, title) {
   const pageWidth = doc.page.width;
   
-  // Title container with better styling
+  // Title container with darker styling
   doc.rect(50, 30, pageWidth - 100, 80)
-     .fillColor('#f5f5f5')
+     .fillColor('#e0e0e0') // Darker background
      .fill();
   
-  // Border for header
+  // Border for header - darker
   doc.rect(50, 30, pageWidth - 100, 80)
-     .strokeColor('#2e7d32')
+     .strokeColor('#000000')
      .lineWidth(2)
      .stroke();
   
-  // Title section
+  // Title section with darker colors
   doc.font('Helvetica-Bold')
      .fontSize(22)
-     .fillColor('#2e7d32')
+     .fillColor('#1a4e1a') // Darker green
      .text('Plant Monitoring System', 70, 45, { align: 'left' })
      .fontSize(14)
-     .fillColor('#666666')
+     .fillColor('#333333') // Darker gray
      .text('Detailed Monitoring Report', 70, 70, { align: 'left' });
   
-  // Page number with better positioning
+  // Page number with darker color
   doc.fontSize(10)
-     .fillColor('#999999')
+     .fillColor('#000000') // Pure black
      .text(`Page ${pageNumber}`, pageWidth - 120, 45, { align: 'right', width: 60 });
      
   return 130; // Return Y position after header with more spacing
@@ -572,17 +585,17 @@ function drawPageFooter(doc, timestamp) {
   const pageWidth = doc.page.width;
   const footerY = doc.page.height - 60; // More space from bottom
   
-  // Footer line
+  // Footer line - darker
   doc.moveTo(50, footerY)
      .lineTo(pageWidth - 50, footerY)
-     .strokeColor('#2e7d32')
-     .strokeOpacity(0.7)
-     .lineWidth(1)
+     .strokeColor('#000000')
+     .strokeOpacity(1)
+     .lineWidth(1.5)
      .stroke();
   
-  // Footer text with better spacing
-  doc.fontSize(8)
-     .fillColor('#666666')
+  // Footer text with darker colors
+  doc.fontSize(9) // Slightly larger font
+     .fillColor('#000000') // Pure black
      .text(
        `Generated on ${timestamp}`,
        50,
