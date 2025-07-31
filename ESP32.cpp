@@ -644,6 +644,12 @@ unsigned long lastReadTime = 0;
 bool isScheduledDate = false;
 String currentDate;
 
+// Add these with other global variables at the top
+unsigned long lastStatusPrintMillis = 0;
+const unsigned long STATUS_PRINT_INTERVAL = 5000;  // Print status every 5 seconds
+bool lastWaterState = false;
+bool lastFertilizerState = false;
+
 void loop() {
     unsigned long currentMillis = millis();
     static int moisturePercent = 0;  // Add this line to declare moisturePercent
@@ -703,6 +709,21 @@ void loop() {
     }
 
     resumeWatchdog();
+
+    // Replace the direct status prints with this new code block
+    if (currentMillis - lastStatusPrintMillis >= STATUS_PRINT_INTERVAL || 
+        lastWaterState != waterState || 
+        lastFertilizerState != fertilizerState) {
+            
+        Serial.println("\n=== System Status ===");
+        Serial.println("💧 Water Pump Status: " + String(waterState ? "ON" : "OFF"));
+        Serial.println("🌱 Fertilizer Status: " + String(fertilizerState ? "ON" : "OFF"));
+        Serial.println("====================\n");
+        
+        lastStatusPrintMillis = currentMillis;
+        lastWaterState = waterState;
+        lastFertilizerState = fertilizerState;
+    }
 
     // Enhanced water pump control logic
     if (waterState) {
