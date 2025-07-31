@@ -646,10 +646,26 @@ function drawPageHeader(doc, pageNumber, title) {
 }
 
 function drawPageFooter(doc, timestamp) {
-  const pageWidth = doc.page.width;
-  const footerY = doc.page.height - 60; // More space from bottom
+  doc.on('pageAdded', () => {
+    addFooter(doc, timestamp);
+  });
   
-  // Footer line - darker
+  // Add footer to the first page
+  addFooter(doc, timestamp);
+}
+
+function addFooter(doc, timestamp) {
+  const pageWidth = doc.page.width;
+  const footerY = doc.page.height - 50;
+  
+  // Save current state
+  doc.save();
+  
+  // Move to the bottom of the page
+  doc.x = 50;
+  doc.y = footerY;
+  
+  // Footer line
   doc.moveTo(50, footerY)
      .lineTo(pageWidth - 50, footerY)
      .strokeColor('#000000')
@@ -657,27 +673,89 @@ function drawPageFooter(doc, timestamp) {
      .lineWidth(1.5)
      .stroke();
   
-  // Footer text with darker colors
-  doc.fontSize(9) // Slightly larger font
-     .fillColor('#000000') // Pure black
-     .text(
-       `Generated on ${timestamp}`,
-       50,
-       footerY + 10,
-       { align: 'left' }
-     )
-     .text(
-       'Plant Monitoring System',
-       50,
-       footerY + 10,
-       { align: 'center', width: pageWidth - 100 }
-     )
-     .text(
-       'Confidential Report',
-       50,
-       footerY + 10,
-       { align: 'right', width: pageWidth - 100 }
-     );
+  // Footer text container
+  const footerTexts = [
+    { text: `Generated on ${timestamp}`, align: 'left' },
+    { text: 'Plant Monitoring System', align: 'center' },
+    { text: 'Confidential Report', align: 'right' }
+  ];
+  
+  footerTexts.forEach(({ text, align }) => {
+    doc.fontSize(9)
+       .fillColor('#000000')
+       .text(
+         text,
+         50,
+         footerY + 10,
+         { 
+           align: align, 
+           width: pageWidth - 100 
+         }
+       );
+  });
+  
+  // Restore state
+  doc.restore();
+}
+
+// Update the report generation logic to respect footer space
+function drawTableRow(doc, data, x, y, width) {
+  // Check if we need a new page
+  if (y > doc.page.height - 75) { // Leave space for footer
+    doc.addPage();
+    return doc.y; // Return the new Y position
+  }
+  
+  const cellWidths = [
+    width * 0.20, // Date & Time - 20%
+    width * 0.12, // Temperature - 12%
+    width * 0.12, // Humidity - 12%
+    width * 0.12, // Moisture - 12%
+    width * 0.15, // Status - 15%
+    width * 0.145, // Watering - 14.5%
+    width * 0.145  // Fertilizer - 14.5%
+  ];
+  
+  const rowHeight = 22;
+  
+  // Alternate row background - lighter but still visible
+  doc.fillColor('#f0f0f0')
+     .rect(x, y, width, rowHeight)
+     .fill();
+
+  // Row borders - dark for better definition
+  doc.strokeColor('#000000')
+     .lineWidth(0.8)
+     .rect(x, y, width, rowHeight)
+     .stroke();
+
+  // Row data with proper positioning
+  let currentX = x;
+  data.forEach((cell, i) => {
+    // Vertical line separators - dark
+    if (i > 0) {
+      doc.moveTo(currentX, y)
+         .lineTo(currentX, y + rowHeight)
+         .strokeColor('#000000')
+         .lineWidth(0.8)
+         .stroke();
+    }
+    
+    doc.fillColor('#000000') // Pure black text
+       .font('Helvetica')
+       .fontSize(9) // Slightly larger font for better readability
+       .text(cell.toString(), 
+             currentX + 3, // Small padding
+             y + 6, // Centered vertically
+             { 
+               width: cellWidths[i] - 6, // Account for padding
+               align: 'center',
+               lineBreak: false
+             });
+    currentX += cellWidths[i];
+  });
+  
+  return y + rowHeight + 2; // Return next Y position with small spacing
 }
 
 // Add after the helper functions section
