@@ -334,7 +334,7 @@ app.get("/api/reports", async (req, res) => {
       const tableWidth = doc.page.width - 100;
       const tableX = 50;
       
-      const headers = ['Date & Time', 'Temperature', 'Humidity', 'Moisture', 'Status'];
+      const headers = ['Date & Time', 'Temperature', 'Humidity', 'Moisture', 'Status', 'Watering', 'Fertilizer'];
       currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
       
       readings.forEach((reading, index) => {
@@ -349,7 +349,9 @@ app.get("/api/reports", async (req, res) => {
           `${reading.temperature || 'N/A'}°C`,
           `${reading.humidity || 'N/A'}%`,
           `${reading.moisture || 'N/A'}%`,
-          reading.moistureStatus || 'N/A'
+          reading.moistureStatus || 'N/A',
+          reading.wateringStatus || '-',
+          reading.fertilizerStatus || '-'
         ];
         
         currentY = drawTableRow(doc, rowData, tableX, currentY, tableWidth);
@@ -438,7 +440,7 @@ app.get("/api/reports/:plantId", async (req, res) => {
       const tableWidth = doc.page.width - 100;
       const tableX = 50;
       
-      const headers = ['Date & Time', 'Temperature', 'Humidity', 'Moisture', 'Status'];
+      const headers = ['Date & Time', 'Temperature', 'Humidity', 'Moisture', 'Status', 'Watering', 'Fertilizer'];
       currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
       
       readings.forEach((reading, index) => {
@@ -453,7 +455,9 @@ app.get("/api/reports/:plantId", async (req, res) => {
           `${reading.temperature || 'N/A'}°C`,
           `${reading.humidity || 'N/A'}%`,
           `${reading.moisture || 'N/A'}%`,
-          reading.moistureStatus || 'N/A'
+          reading.moistureStatus || 'N/A',
+          reading.wateringStatus || '-',
+          reading.fertilizerStatus || '-'
         ];
         
         currentY = drawTableRow(doc, rowData, tableX, currentY, tableWidth);
@@ -509,36 +513,18 @@ function drawTableRow(doc, data, x, y, width) {
      .rect(x, y, width, 20)
      .fill();
 
-  // Row data with word wrap for status columns
+  // Row data
   data.forEach((cell, i) => {
     doc.fillColor('#000000')
        .font('Helvetica')
-       .fontSize(8); // Slightly smaller font for more content
-
-        // Use different cell formatting for different columns
-        if (i >= 5) { // Watering and Fertilizer columns
-            doc.text(cell.toString(), 
-                x + (i * cellWidth) + 3, 
-                y + 2,
-                { 
-                    width: cellWidth - 6,
-                    height: 16,
-                    ellipsis: true
-                }
-            );
-        } else {
-            doc.text(cell.toString(), 
-                x + (i * cellWidth) + 3, 
-                y + 5,
-                { 
-                    width: cellWidth - 6,
-                    align: i === 0 ? 'left' : 'center'
-                }
-            );
-        }
-    });
-    
-    return y + 22;
+       .fontSize(9)
+       .text(cell.toString(), 
+             x + (i * cellWidth) + 5, 
+             y + 5,
+             { width: cellWidth - 10 });
+  });
+  
+  return y + 22; // Return next Y position
 }
 
 function drawPageHeader(doc, pageNumber, title) {
@@ -815,63 +801,20 @@ async function saveEventLog(eventData) {
     });
 }
 
-// Enhance event logging endpoint with validation and logging
+// Add new endpoint for event logging
 app.post("/api/events", async (req, res) => {
     try {
         const eventData = req.body;
         
-        // Enhanced validation
-        const requiredFields = ['plantId', 'type', 'action'];
-        const missingFields = requiredFields.filter(field => !eventData[field]);
-        if (missingFields.length > 0) {
-            return res.status(400).json({ 
-                error: "Missing required event data", 
-                missingFields,
-                receivedData: eventData 
-            });
+        if (!eventData.plantId || !eventData.type || !eventData.action) {
+            return res.status(400).json({ error: "Missing required event data" });
         }
-
-        // Validate event type
-        const validTypes = ['watering', 'fertilizer'];
-        if (!validTypes.includes(eventData.type)) {
-            return res.status(400).json({
-                error: "Invalid event type",
-                receivedType: eventData.type,
-                validTypes,
-                receivedData: eventData
-            });
-        }
-
-        // Log incoming event data for debugging
-        console.log('📝 Received event data:', {
-            plantId: eventData.plantId,
-            type: eventData.type,
-            action: eventData.action,
-            details: eventData.details || 'No details provided',
-            timestamp: moment().tz('Asia/Manila').format()
-        });
 
         const result = await saveEventLog(eventData);
-        
-        // Log successful save
-        console.log('✅ Event logged successfully:', {
-            id: result.insertedId,
-            type: eventData.type,
-            action: eventData.action
-        });
-
-        res.status(201).json({ 
-            message: "Event logged", 
-            id: result.insertedId,
-            eventData
-        });
+        res.status(201).json({ message: "Event logged", id: result.insertedId });
     } catch (error) {
-        console.error("❌ Error logging event:", {
-            error: error.message,
-            stack: error.stack,
-            eventData: req.body
-        });
-        res.status(500).json({ error: "Failed to log event", details: error.message });
+        console.error("❌ Error logging event:", error);
+        res.status(500).json({ error: "Failed to log event" });
     }
 });
 
@@ -964,21 +907,7 @@ function calculateReadingStats(readings) {
 }
 
 function calculateEventStats(events, type) {
-    // Log event stats calculation
-    console.log(`📊 Calculating stats for ${type} events:`, {
-        totalEvents: events.length,
-        eventsOfType: events.filter(e => e.type === type).length
-    });
-
     const typeEvents = events.filter(e => e.type === type);
-    
-    // Log filtered events for debugging
-    if (typeEvents.length === 0) {
-        console.log(`⚠️ No ${type} events found in date range`);
-    } else {
-        console.log(`✅ Found ${typeEvents.length} ${type} events`);
-    }
-
     return {
         total: typeEvents.length,
         byAction: typeEvents.reduce((acc, e) => {
@@ -986,13 +915,7 @@ function calculateEventStats(events, type) {
             return acc;
         }, {}),
         firstEvent: typeEvents[0]?.timestamp,
-        lastEvent: typeEvents[typeEvents.length - 1]?.timestamp,
-        // Add event details for debugging
-        events: typeEvents.map(e => ({
-            timestamp: moment(e.timestamp).format('YYYY-MM-DD HH:mm:ss'),
-            action: e.action,
-            details: e.details
-        }))
+        lastEvent: typeEvents[typeEvents.length - 1]?.timestamp
     };
 }
 
@@ -1003,104 +926,132 @@ function generateEnhancedPDFReport(doc, data) {
     // General stats summary
     drawReportSummary(doc, data, currentY);
     
-    // Combined Sensor & System Data Table
+    // Watering and Fertilizer Logs Page
     doc.addPage();
-    currentY = drawPageHeader(doc, 2, 'Combined Sensor & System Data');
+    currentY = drawPageHeader(doc, 2, 'System Activity Logs');
     
-    // Updated headers to include watering and fertilizer status
-    const headers = [
-        'Date & Time',
-        'Temperature',
-        'Humidity',
-        'Moisture',
-        'Status',
-        'Watering',
-        'Fertilizer'
-    ];
+    // Watering Events Table
+    doc.fontSize(14).text('Watering Activity Log', { underline: true });
+    currentY = doc.y + 10;
+    
+    const waterHeaders = ['Date & Time', 'Action', 'Details'];
+    const waterWidth = doc.page.width - 100;
+    currentY = drawTableHeader(doc, waterHeaders, 50, currentY, waterWidth);
+    
+    data.events
+        .filter(e => e.type === 'watering')
+        .forEach(event => {
+            const rowData = [
+                moment(event.timestamp).format('YYYY-MM-DD HH:mm:ss'),
+                event.action.toUpperCase(),
+                event.details || '-'
+            ];
+            currentY = drawTableRow(doc, rowData, 50, currentY, waterWidth);
+            
+            // Add new page if needed
+            if (currentY > doc.page.height - 100) {
+                doc.addPage();
+                currentY = drawPageHeader(doc, 3, 'System Activity Logs');
+                currentY = drawTableHeader(doc, waterHeaders, 50, currentY, waterWidth);
+            }
+        });
 
-    const tableWidth = doc.page.width - 100;
-    const tableX = 50;
-    currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
+    // Fertilizer Events Table
+    doc.addPage();
+    currentY = drawPageHeader(doc, 4, 'System Activity Logs');
+    doc.fontSize(14).text('Fertilizer Activity Log', { underline: true });
+    currentY = doc.y + 10;
+    
+    const fertHeaders = ['Date & Time', 'Action', 'Details'];
+    currentY = drawTableHeader(doc, fertHeaders, 50, currentY, waterWidth);
+    
+    data.events
+        .filter(e => e.type === 'fertilizer')
+        .forEach(event => {
+            const rowData = [
+                moment(event.timestamp).format('YYYY-MM-DD HH:mm:ss'),
+                event.action.toUpperCase(),
+                event.details || '-'
+            ];
+            currentY = drawTableRow(doc, rowData, 50, currentY, waterWidth);
+            
+            // Add new page if needed
+            if (currentY > doc.page.height - 100) {
+                doc.addPage();
+                currentY = drawPageHeader(doc, 5, 'System Activity Logs');
+                currentY = drawTableHeader(doc, fertHeaders, 50, currentY, waterWidth);
+            }
+        });
 
-    // Create a map of events by timestamp for easy lookup
-    const eventsByTimestamp = {};
-    data.events.forEach(event => {
-        const timeKey = moment(event.timestamp).format('YYYY-MM-DD HH:mm');
-        if (!eventsByTimestamp[timeKey]) {
-            eventsByTimestamp[timeKey] = {};
-        }
-        eventsByTimestamp[timeKey][event.type] = {
-            action: event.action,
-            details: event.details
-        };
-    });
-
-    // Combined data with events
-    data.readings.forEach((reading, index) => {
-        const timeKey = moment(reading.timestamp).format('YYYY-MM-DD HH:mm');
-        const events = eventsByTimestamp[timeKey] || {};
-        
+    // Sensor Readings Page
+    doc.addPage();
+    currentY = drawPageHeader(doc, 6, 'Sensor Readings');
+    
+    // Add sensor readings table (existing code)
+    const readingsHeaders = ['Date & Time', 'Temperature', 'Humidity', 'Moisture', 'Status'];
+    currentY = drawTableHeader(doc, readingsHeaders, 50, currentY, waterWidth);
+    
+    readings.forEach((reading, index) => {
         const rowData = [
             moment(reading.timestamp).format('YYYY-MM-DD HH:mm:ss'),
             `${reading.temperature || 'N/A'}°C`,
             `${reading.humidity || 'N/A'}%`,
             `${reading.moisture || 'N/A'}%`,
-            reading.moistureStatus || 'N/A',
-            events.watering ? `${events.watering.action} - ${events.watering.details || ''}` : '-',
-            events.fertilizer ? `${events.fertilizer.action} - ${events.fertilizer.details || ''}` : '-'
+            reading.moistureStatus || 'N/A'
         ];
         
-        currentY = drawTableRow(doc, rowData, tableX, currentY, tableWidth);
+        currentY = drawTableRow(doc, rowData, 50, currentY, waterWidth);
         
+        // Add new page if needed
         if (currentY > doc.page.height - 70) {
             doc.addPage();
-            currentY = drawPageHeader(doc, Math.floor(index / 20) + 3);
-            currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
+            currentY = drawPageHeader(doc, Math.floor(index / 20) + 7);
+            currentY = drawTableHeader(doc, readingsHeaders, 50, currentY, waterWidth);
         }
     });
     
     drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
 }
 
-// Update the table row function to handle more columns
-function drawTableRow(doc, data, x, y, width) {
-  const cellWidth = width / data.length;
-  
-  // Alternate row background
-  doc.fillColor('#f9f9f9', 0.5)
-     .rect(x, y, width, 20)
-     .fill();
 
-  // Row data with word wrap for status columns
-  data.forEach((cell, i) => {
-    doc.fillColor('#000000')
-       .font('Helvetica')
-       .fontSize(8); // Slightly smaller font for more content
-
-        // Use different cell formatting for different columns
-        if (i >= 5) { // Watering and Fertilizer columns
-            doc.text(cell.toString(), 
-                x + (i * cellWidth) + 3, 
-                y + 2,
-                { 
-                    width: cellWidth - 6,
-                    height: 16,
-                    ellipsis: true
-                }
-            );
-        } else {
-            doc.text(cell.toString(), 
-                x + (i * cellWidth) + 3, 
-                y + 5,
-                { 
-                    width: cellWidth - 6,
-                    align: i === 0 ? 'left' : 'center'
-                }
-            );
-        }
-    });
+// Add new helper function for report summary
+function drawReportSummary(doc, data, startY) {
+    const stats = data.stats;
+    const summaryWidth = doc.page.width - 100;
     
-    return y + 22;
+    doc.fontSize(12).text('Activity Summary', { underline: true });
+    doc.fontSize(10);
+    
+    // Watering Stats
+    doc.text(`Watering Events: ${stats.watering.total}`, 50, doc.y + 10);
+    if (stats.watering.byAction) {
+        Object.entries(stats.watering.byAction).forEach(([action, count]) => {
+            doc.text(`  - ${action}: ${count}`, 70, doc.y + 5);
+        });
+    }
+    
+    // Fertilizer Stats
+    doc.text(`Fertilizer Events: ${stats.fertilizer.total}`, 50, doc.y + 10);
+    if (stats.fertilizer.byAction) {
+        Object.entries(stats.fertilizer.byAction).forEach(([action, count]) => {
+            doc.text(`  - ${action}: ${count}`, 70, doc.y + 5);
+        });
+    }
+    
+    // Sensor Reading Stats
+    const avgTemp = stats.readings.averages.temperature / stats.readings.averages.count;
+    const avgHumidity = stats.readings.averages.humidity / stats.readings.averages.count;
+    const avgMoisture = stats.readings.averages.moisture / stats.readings.averages.count;
+    
+    doc.text('Sensor Reading Averages:', 50, doc.y + 15);
+    doc.text(`  - Temperature: ${avgTemp.toFixed(1)}°C`, 70, doc.y + 5);
+    doc.text(`  - Humidity: ${avgHumidity.toFixed(1)}%`, 70, doc.y + 5);
+    doc.text(`  - Moisture: ${avgMoisture.toFixed(1)}%`, 70, doc.y + 5);
 }
 
-// ...existing code...
+// ==========================
+// ✅ Start the Server
+// ==========================
+app.listen(port, () => {
+  console.log(`✅ Server started at http://localhost:${port}`);
+});
