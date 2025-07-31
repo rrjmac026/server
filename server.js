@@ -240,40 +240,6 @@ app.get("/api/sensor-data", async (req, res) => {
 // ==========================
 // ✅ Get Latest Sensor Data
 // ==========================
-app.get("/api/plants/:plantId/latest-sensor-data", async (req, res) => {
-  try {
-    const { plantId } = req.params;
-    console.log(`📡 Fetching latest sensor data for plant ${plantId}`);
-
-    const latestReading = await getLatestReading(plantId);
-
-    if (!latestReading) {
-      return res.status(404).json({ 
-        error: 'No sensor data found',
-        moisture: 0, 
-        temperature: 0, 
-        humidity: 0, 
-        moistureStatus: "NO_DATA" 
-      });
-    }
-
-    const response = {
-      moisture: latestReading.moisture || 0,
-      temperature: latestReading.temperature || 0,
-      humidity: latestReading.humidity || 0,
-      moistureStatus: latestReading.moistureStatus || "NO_DATA",
-      timestamp: moment(latestReading.timestamp).tz('Asia/Manila').format()
-    };
-    res.json(response);
-  } catch (error) {
-    console.error("❌ Error fetching latest sensor data:", error.message);
-    res.status(500).json({ error: "Failed to load sensor data" });
-  }
-});
-
-// ==========================
-// ✅ PDF Report Endpoint - FIXED TO SHOW ALL READINGS
-// ==========================
 app.get("/api/reports", async (req, res) => {
   try {
     const { plantId, start, end, format = 'pdf' } = req.query;
@@ -299,14 +265,14 @@ app.get("/api/reports", async (req, res) => {
       doc.pipe(res);
 
       let currentY = drawPageHeader(doc, 1, 'Plant Monitoring Report');
-      currentY += 20;
+      currentY += 30; // Increased spacing after header
 
       // Report details in a centered table
       const reportDetailsWidth = 400;
       const startX = (doc.page.width - reportDetailsWidth) / 2;
       
-      // Details table
-      doc.rect(startX, currentY, reportDetailsWidth, 60)
+      // Details table background
+      doc.rect(startX, currentY, reportDetailsWidth, 80) // Increased height
          .fillColor('#f9f9f9')
          .fill();
       
@@ -314,23 +280,23 @@ app.get("/api/reports", async (req, res) => {
          .fontSize(10)
          .fillColor('#000000');
       
-      // Details rows
+      // Details rows with better spacing
       const detailsData = [
         ['Plant ID:', plantId, 'Generated:', moment().tz('Asia/Manila').format('YYYY-MM-DD LT')],
-        ['Period:', `${moment(start).format('YYYY-MM-DD')} to ${moment(end).format('YYYY-MM-DD')}`, '', '']
+        ['Period:', `${moment(start).format('YYYY-MM-DD')} to ${moment(end).format('YYYY-MM-DD')}`, 'Total Records:', readings.length.toString()]
       ];
       
       detailsData.forEach((row, i) => {
-        const rowY = currentY + (i * 25) + 10;
+        const rowY = currentY + (i * 30) + 15; // Better vertical spacing
         doc.font('Helvetica-Bold').text(row[0], startX + 20, rowY);
-        doc.font('Helvetica').text(row[1], startX + 80, rowY);
+        doc.font('Helvetica').text(row[1], startX + 100, rowY); // Adjusted X position
         doc.font('Helvetica-Bold').text(row[2], startX + 220, rowY);
-        doc.font('Helvetica').text(row[3], startX + 280, rowY);
+        doc.font('Helvetica').text(row[3], startX + 300, rowY); // Adjusted X position
       });
       
-      currentY += 80;
+      currentY += 100; // Increased spacing after details
 
-      // Readings table
+      // Readings table with better spacing
       const tableWidth = doc.page.width - 100;
       const tableX = 50;
       
@@ -338,14 +304,14 @@ app.get("/api/reports", async (req, res) => {
       currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
       
       readings.forEach((reading, index) => {
-        if (currentY > doc.page.height - 70) {
+        if (currentY > doc.page.height - 100) { // More space for footer
           doc.addPage();
-          currentY = drawPageHeader(doc, Math.floor(index / 20) + 2);
+          currentY = drawPageHeader(doc, Math.floor(index / 15) + 2); // Fewer rows per page
           currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
         }
         
         const rowData = [
-          moment(reading.timestamp).format('YYYY-MM-DD HH:mm:ss'),
+          moment(reading.timestamp).format('MM-DD HH:mm'), // Shorter date format
           `${reading.temperature || 'N/A'}°C`,
           `${reading.humidity || 'N/A'}%`,
           `${reading.moisture || 'N/A'}%`,
@@ -405,14 +371,14 @@ app.get("/api/reports/:plantId", async (req, res) => {
       doc.pipe(res);
 
       let currentY = drawPageHeader(doc, 1, 'Plant Monitoring Report');
-      currentY += 20;
+      currentY += 30; // Increased spacing after header
 
       // Report details in a centered table
       const reportDetailsWidth = 400;
       const startX = (doc.page.width - reportDetailsWidth) / 2;
       
-      // Details table
-      doc.rect(startX, currentY, reportDetailsWidth, 60)
+      // Details table background
+      doc.rect(startX, currentY, reportDetailsWidth, 80) // Increased height
          .fillColor('#f9f9f9')
          .fill();
       
@@ -420,23 +386,23 @@ app.get("/api/reports/:plantId", async (req, res) => {
          .fontSize(10)
          .fillColor('#000000');
       
-      // Details rows
+      // Details rows with better spacing
       const detailsData = [
         ['Plant ID:', plantId, 'Generated:', moment().tz('Asia/Manila').format('YYYY-MM-DD LT')],
-        ['Period:', `${moment(start).format('YYYY-MM-DD')} to ${moment(end).format('YYYY-MM-DD')}`, '', '']
+        ['Period:', `${moment(start).format('YYYY-MM-DD')} to ${moment(end).format('YYYY-MM-DD')}`, 'Total Records:', readings.length.toString()]
       ];
       
       detailsData.forEach((row, i) => {
-        const rowY = currentY + (i * 25) + 10;
+        const rowY = currentY + (i * 30) + 15; // Better vertical spacing
         doc.font('Helvetica-Bold').text(row[0], startX + 20, rowY);
-        doc.font('Helvetica').text(row[1], startX + 80, rowY);
+        doc.font('Helvetica').text(row[1], startX + 100, rowY); // Adjusted X position
         doc.font('Helvetica-Bold').text(row[2], startX + 220, rowY);
-        doc.font('Helvetica').text(row[3], startX + 280, rowY);
+        doc.font('Helvetica').text(row[3], startX + 300, rowY); // Adjusted X position
       });
       
-      currentY += 80;
+      currentY += 100; // Increased spacing after details
 
-      // Readings table
+      // Readings table with better spacing
       const tableWidth = doc.page.width - 100;
       const tableX = 50;
       
@@ -444,14 +410,14 @@ app.get("/api/reports/:plantId", async (req, res) => {
       currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
       
       readings.forEach((reading, index) => {
-        if (currentY > doc.page.height - 70) {
+        if (currentY > doc.page.height - 100) { // More space for footer
           doc.addPage();
-          currentY = drawPageHeader(doc, Math.floor(index / 20) + 2);
+          currentY = drawPageHeader(doc, Math.floor(index / 15) + 2); // Fewer rows per page
           currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
         }
         
         const rowData = [
-          moment(reading.timestamp).format('YYYY-MM-DD HH:mm:ss'),
+          moment(reading.timestamp).format('MM-DD HH:mm'), // Shorter date format
           `${reading.temperature || 'N/A'}°C`,
           `${reading.humidity || 'N/A'}%`,
           `${reading.moisture || 'N/A'}%`,
@@ -482,94 +448,158 @@ app.get("/api/reports/:plantId", async (req, res) => {
   }
 });
 
-// Add these helper functions after the existing helper functions
+// FIXED HELPER FUNCTIONS with proper positioning
 function drawTableHeader(doc, headers, x, y, width) {
-  const cellWidth = width / headers.length;
+  const cellWidths = [
+    width * 0.20, // Date & Time - 20%
+    width * 0.12, // Temperature - 12%
+    width * 0.12, // Humidity - 12%
+    width * 0.12, // Moisture - 12%
+    width * 0.15, // Status - 15%
+    width * 0.145, // Watering - 14.5%
+    width * 0.145  // Fertilizer - 14.5%
+  ];
   
   // Header background
   doc.fillColor('#2e7d32')
-     .rect(x, y, width, 20)
+     .rect(x, y, width, 25) // Increased height
      .fill();
 
-  // Header text
+  // Header text with proper positioning
+  let currentX = x;
   headers.forEach((header, i) => {
     doc.fillColor('#ffffff')
        .font('Helvetica-Bold')
-       .fontSize(10)
+       .fontSize(9) // Slightly smaller font
        .text(header, 
-             x + (i * cellWidth) + 5, 
-             y + 5,
-             { width: cellWidth - 10 });
+             currentX + 3, // Small padding
+             y + 7, // Centered vertically
+             { 
+               width: cellWidths[i] - 6, // Account for padding
+               align: 'center',
+               lineBreak: false
+             });
+    currentX += cellWidths[i];
   });
   
-  return y + 25; // Return next Y position
+  return y + 30; // Return next Y position with spacing
 }
 
 function drawTableRow(doc, data, x, y, width) {
-  const cellWidth = width / data.length;
+  const cellWidths = [
+    width * 0.20, // Date & Time - 20%
+    width * 0.12, // Temperature - 12%
+    width * 0.12, // Humidity - 12%
+    width * 0.12, // Moisture - 12%
+    width * 0.15, // Status - 15%
+    width * 0.145, // Watering - 14.5%
+    width * 0.145  // Fertilizer - 14.5%
+  ];
+  
+  const rowHeight = 22;
   
   // Alternate row background
-  doc.fillColor('#f9f9f9', 0.5)
-     .rect(x, y, width, 20)
+  doc.fillColor('#f9f9f9', 0.3)
+     .rect(x, y, width, rowHeight)
      .fill();
 
-  // Row data
+  // Row borders (optional - for better visual separation)
+  doc.strokeColor('#e0e0e0')
+     .lineWidth(0.5)
+     .rect(x, y, width, rowHeight)
+     .stroke();
+
+  // Row data with proper positioning
+  let currentX = x;
   data.forEach((cell, i) => {
+    // Vertical line separators
+    if (i > 0) {
+      doc.moveTo(currentX, y)
+         .lineTo(currentX, y + rowHeight)
+         .strokeColor('#e0e0e0')
+         .stroke();
+    }
+    
     doc.fillColor('#000000')
        .font('Helvetica')
-       .fontSize(9)
+       .fontSize(8) // Smaller font for better fit
        .text(cell.toString(), 
-             x + (i * cellWidth) + 5, 
-             y + 5,
-             { width: cellWidth - 10 });
+             currentX + 3, // Small padding
+             y + 6, // Centered vertically
+             { 
+               width: cellWidths[i] - 6, // Account for padding
+               align: 'center',
+               lineBreak: false
+             });
+    currentX += cellWidths[i];
   });
   
-  return y + 22; // Return next Y position
+  return y + rowHeight + 2; // Return next Y position with small spacing
 }
 
 function drawPageHeader(doc, pageNumber, title) {
   const pageWidth = doc.page.width;
   
-  // Title container
-  doc.rect(50, 30, pageWidth - 100, 70)
-     .fill('#f9f9f9');
+  // Title container with better styling
+  doc.rect(50, 30, pageWidth - 100, 80)
+     .fillColor('#f5f5f5')
+     .fill();
   
-  // Title section - adjusted positioning since there's no logo
+  // Border for header
+  doc.rect(50, 30, pageWidth - 100, 80)
+     .strokeColor('#2e7d32')
+     .lineWidth(2)
+     .stroke();
+  
+  // Title section
   doc.font('Helvetica-Bold')
-     .fontSize(24)
+     .fontSize(22)
      .fillColor('#2e7d32')
-     .text('Plant Monitoring System', 60, 40)
-     .fontSize(16)
+     .text('Plant Monitoring System', 70, 45, { align: 'left' })
+     .fontSize(14)
      .fillColor('#666666')
-     .text('Detailed Report', 60, 65);
+     .text('Detailed Monitoring Report', 70, 70, { align: 'left' });
   
-  // Page number
+  // Page number with better positioning
   doc.fontSize(10)
      .fillColor('#999999')
-     .text(`Page ${pageNumber}`, pageWidth - 100, 40, { align: 'right' });
+     .text(`Page ${pageNumber}`, pageWidth - 120, 45, { align: 'right', width: 60 });
      
-  return 120; // Return Y position after header
+  return 130; // Return Y position after header with more spacing
 }
 
 function drawPageFooter(doc, timestamp) {
   const pageWidth = doc.page.width;
-  const footerY = doc.page.height - 50;
+  const footerY = doc.page.height - 60; // More space from bottom
   
   // Footer line
   doc.moveTo(50, footerY)
      .lineTo(pageWidth - 50, footerY)
      .strokeColor('#2e7d32')
-     .strokeOpacity(0.5)
+     .strokeOpacity(0.7)
+     .lineWidth(1)
      .stroke();
   
-  // Footer text
+  // Footer text with better spacing
   doc.fontSize(8)
      .fillColor('#666666')
      .text(
-       `Generated on ${timestamp} - Plant Monitoring System`,
+       `Generated on ${timestamp}`,
+       50,
+       footerY + 10,
+       { align: 'left' }
+     )
+     .text(
+       'Plant Monitoring System',
        50,
        footerY + 10,
        { align: 'center', width: pageWidth - 100 }
+     )
+     .text(
+       'Confidential Report',
+       50,
+       footerY + 10,
+       { align: 'right', width: pageWidth - 100 }
      );
 }
 
