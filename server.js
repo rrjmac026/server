@@ -691,219 +691,136 @@ function drawPageFooter(doc, timestamp) {
   );
 }
 
-// Update the report generation logic to respect footer space
-app.get("/api/reports/:plantId", async (req, res) => {
-  try {
-    const { plantId } = req.params;
-    const { start, end, format = 'pdf' } = req.query;
-    
-    if (!start || !end) {
-      return res.status(400).json({
-        error: "Missing parameters",
-        example: "/api/reports/PLANT123?start=2024-01-01&end=2024-01-31&format=pdf|json"
-      });
-    }
-
-    console.log('Debug - Report Request:', { plantId, start, end, format });
-
-    // Fetch all readings with debug logging
-    const readings = await getAllReadingsInRange(plantId, start, end);
-    console.log(`Debug - Total readings found: ${readings?.length || 0}`);
-
-    if (!readings || readings.length === 0) {
-      console.log('Debug - No readings found for criteria:', { plantId, start, end });
-      if (format === 'json') {
-        return res.json({ 
-          totalReadings: 0,
-          stats: calculateStats([]),
-          allReadings: []
-        });
-      }
-    }
-
-    if (format === 'pdf') {
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename=plant-report-${plantId}.pdf`);
-      
-      const doc = new PDFDocument({ margin: 50 });
-      doc.pipe(res);
-
-      let currentY = drawPageHeader(doc, 1, 'Plant Monitoring Report');
-      currentY += 30;
-
-      // Report details in a centered table
-      const reportDetailsWidth = 400;
-      const startX = (doc.page.width - reportDetailsWidth) / 2;
-      
-      // Details table background
-      doc.rect(startX, currentY, reportDetailsWidth, 80) // Increased height
-         .fillColor('#f9f9f9')
-         .fill();
-      
-      doc.font('Helvetica')
-         .fontSize(10)
-         .fillColor('#000000');
-      
-      // Details rows with better spacing
-      const detailsData = [
-        ['Plant ID:', plantId, 'Generated:', moment().tz('Asia/Manila').format('YYYY-MM-DD LT')],
-        ['Period:', `${moment(start).format('YYYY-MM-DD')} to ${moment(end).format('YYYY-MM-DD')}`, 'Total Records:', readings.length.toString()]
-      ];
-      
-      detailsData.forEach((row, i) => {
-        const rowY = currentY + (i * 30) + 15; // Better vertical spacing
-        doc.font('Helvetica-Bold').text(row[0], startX + 20, rowY);
-        doc.font('Helvetica').text(row[1], startX + 100, rowY); // Adjusted X position
-        doc.font('Helvetica-Bold').text(row[2], startX + 220, rowY);
-        doc.font('Helvetica').text(row[3], startX + 300, rowY); // Adjusted X position
-      });
-      
-      currentY += 100; // Increased spacing after details
-
-      // Readings table with better spacing
-      const tableWidth = doc.page.width - 100;
-      const tableX = 50;
-      
-      const headers = ['Date & Time', 'Temperature', 'Humidity', 'Moisture', 'Status', 'Watering', 'Fertilizer'];
-      currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
-      
-      readings.forEach((reading, index) => {
-        if (currentY > doc.page.height - 100) { // More space for footer
-          doc.addPage();
-          currentY = drawPageHeader(doc, Math.floor(index / 15) + 2); // Fewer rows per page
-          currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
-        }
-        
-        const rowData = [
-          moment(reading.timestamp).format('MM-DD HH:mm'), // Shorter date format
-          `${reading.temperature || 'N/A'}°C`,
-          `${reading.humidity || 'N/A'}%`,
-          `${reading.moisture || 'N/A'}%`,
-          reading.moistureStatus || 'N/A',
-          reading.wateringStatus || '-',
-          reading.fertilizerStatus || '-'
-        ];
-        
-        currentY = drawTableRow(doc, rowData, tableX, currentY, tableWidth);
-      });
-      
-      drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
-      
-      doc.end();
-    } else {
-      // JSON format - return all readings
-      const stats = calculateStats(readings);
-      res.json({ 
-        totalReadings: readings.length,
-        stats,
-        allReadings: readings
-      });
-    }
-
-  } catch (error) {
-    console.error("❌ Report generation error:", error);
-    res.status(500).json({ 
-        error: "Failed to generate report", 
-        details: error.message,
-        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
-  }
-});
-
 // ==========================
 // ✅ Audit Logs Endpoints
 // ==========================
 
-// Create audit log
-app.post('/api/audit-logs', async (req, res) => {
+// Get audit logs with stats and filtering
+app.get('/api/audit-logs', async (req, res) => {
     try {
         const collection = await getCollection('audit_logs');
-        const result = await collection.insertOne({
-            ...req.body,
-            timestamp: new Date()
+        const { start, end, type, action, page = 1, limit = 20 } = req.query;
+        
+        let query = {};
+        
+        // Build query filters
+        if (start || end) {
+            query.timestamp = {};
+            if (start) query.timestamp.$gte = new Date(start);
+            if (end) query.timestamp.$lte = new Date(end);
+        }
+        if (type) query.type = type;
+        if (action) query.action = action;
+        
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        
+        // Execute query with proper error handling
+        const [logs, total] = await Promise.all([
+            collection
+                .find(query)
+                .sort({ timestamp: -1 })
+                .skip(skip)
+                .limit(parseInt(limit))
+                .toArray(),
+            collection.countDocuments(query)
+        ]);
+            
+        res.json({
+            success: true,
+            data: {
+                logs,
+                total,
+                page: parseInt(page),
+                pages: Math.ceil(total / parseInt(limit))
+            }
         });
-        res.status(201).json({ message: 'Audit log created', id: result.insertedId });
     } catch (error) {
-        console.error('❌ Error creating audit log:', error);
-        res.status(500).json({ error: 'Failed to create audit log' });
+        console.error('Error fetching audit logs:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Failed to fetch audit logs',
+            message: error.message 
+        });
     }
-});
-
-// Get audit logs with filtering
-app.get('/api/audit-logs', async (req, res) => {
-  try {
-    const { startDate, endDate, type, action, limit = 50, page = 1 } = req.query;
-    
-    let query = db.collection('audit_logs').orderBy('timestamp', 'desc');
-    
-    if (startDate) {
-      query = query.where('timestamp', '>=', new Date(startDate));
-    }
-    if (endDate) {
-      query = query.where('timestamp', '<=', new Date(endDate));
-    }
-    if (type) {
-      query = query.where('type', '==', type);
-    }
-    if (action) {
-      query = query.where('action', '==', action);
-    }
-    
-    const snapshot = await query.get();
-    const logs = snapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data(),
-      timestamp: doc.data().timestamp?.toDate().toISOString(),
-    }));
-    
-    res.json({ logs, total: logs.length });
-  } catch (error) {
-    console.error('❌ Error fetching audit logs:', error);
-    res.status(500).json({ error: 'Failed to fetch audit logs' });
-  }
-});
-
-// Get audit log actions
-app.get('/api/audit-logs/actions', async (req, res) => {
-  try {
-    const snapshot = await db.collection('audit_logs')
-      .select('action')
-      .get();
-    
-    const actions = [...new Set(snapshot.docs.map(doc => doc.data().action))];
-    res.json({ actions });
-  } catch (error) {
-    console.error('❌ Error fetching audit log actions:', error);
-    res.status(500).json({ error: 'Failed to fetch audit log actions' });
-  }
 });
 
 // Get audit logs stats
 app.get('/api/audit-logs/stats', async (req, res) => {
-  try {
-    const snapshot = await db.collection('audit_logs').get();
-    const logs = snapshot.docs.map(doc => doc.data());
-    
-    const stats = {
-      total: logs.length,
-      byType: {},
-      byAction: {},
-      byStatus: {
-        success: logs.filter(log => !log.error).length,
-        error: logs.filter(log => log.error).length
-      }
-    };
-    
-    logs.forEach(log => {
-      stats.byType[log.type] = (stats.byType[log.type] || 0) + 1;
-      stats.byAction[log.action] = (stats.byAction[log.action] || 0) + 1;
-    });
-    
-    res.json(stats);
-  } catch (error) {
-    console.error('❌ Error fetching audit log stats:', error);
-    res.status(500).json({ error: 'Failed to fetch audit log stats' });
-  }
+    try {
+        const collection = await getCollection('audit_logs');
+        
+        const [totalCount, typeStats, statusStats] = await Promise.all([
+            collection.countDocuments(),
+            collection.aggregate([
+                {
+                    $group: {
+                        _id: '$type',
+                        count: { $sum: 1 }
+                    }
+                }
+            ]).toArray(),
+            collection.aggregate([
+                {
+                    $group: {
+                        _id: '$status',
+                        count: { $sum: 1 }
+                    }
+                }
+            ]).toArray()
+        ]);
+
+        const byType = Object.fromEntries(
+            typeStats.map(t => [t._id || 'unknown', t.count])
+        );
+
+        const byStatus = Object.fromEntries(
+            statusStats.map(s => [s._id || 'unknown', s.count])
+        );
+
+        res.json({
+            success: true,
+            data: {
+                total: totalCount,
+                byType,
+                byStatus: {
+                    success: byStatus.success || 0,
+                    error: byStatus.error || 0
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching audit log stats:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Failed to fetch audit log stats',
+            message: error.message 
+        });
+    }
+});
+
+// Get unique audit log actions
+app.get('/api/audit-logs/actions', async (req, res) => {
+    try {
+        const collection = await getCollection('audit_logs');
+        const actions = await collection.distinct('action', {
+            action: { $exists: true, $ne: null }
+        });
+        
+        res.json({
+            success: true,
+            data: {
+                actions: actions.filter(Boolean) // Remove any null/undefined/empty values
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching audit log actions:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Failed to fetch audit log actions',
+            message: error.message,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+    }
 });
 
 // ==========================
