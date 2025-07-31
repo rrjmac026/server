@@ -797,20 +797,63 @@ async function saveEventLog(eventData) {
     });
 }
 
-// Add new endpoint for event logging
+// Enhance event logging endpoint with validation and logging
 app.post("/api/events", async (req, res) => {
     try {
         const eventData = req.body;
         
-        if (!eventData.plantId || !eventData.type || !eventData.action) {
-            return res.status(400).json({ error: "Missing required event data" });
+        // Enhanced validation
+        const requiredFields = ['plantId', 'type', 'action'];
+        const missingFields = requiredFields.filter(field => !eventData[field]);
+        if (missingFields.length > 0) {
+            return res.status(400).json({ 
+                error: "Missing required event data", 
+                missingFields,
+                receivedData: eventData 
+            });
         }
 
+        // Validate event type
+        const validTypes = ['watering', 'fertilizer'];
+        if (!validTypes.includes(eventData.type)) {
+            return res.status(400).json({
+                error: "Invalid event type",
+                receivedType: eventData.type,
+                validTypes,
+                receivedData: eventData
+            });
+        }
+
+        // Log incoming event data for debugging
+        console.log('📝 Received event data:', {
+            plantId: eventData.plantId,
+            type: eventData.type,
+            action: eventData.action,
+            details: eventData.details || 'No details provided',
+            timestamp: moment().tz('Asia/Manila').format()
+        });
+
         const result = await saveEventLog(eventData);
-        res.status(201).json({ message: "Event logged", id: result.insertedId });
+        
+        // Log successful save
+        console.log('✅ Event logged successfully:', {
+            id: result.insertedId,
+            type: eventData.type,
+            action: eventData.action
+        });
+
+        res.status(201).json({ 
+            message: "Event logged", 
+            id: result.insertedId,
+            eventData
+        });
     } catch (error) {
-        console.error("❌ Error logging event:", error);
-        res.status(500).json({ error: "Failed to log event" });
+        console.error("❌ Error logging event:", {
+            error: error.message,
+            stack: error.stack,
+            eventData: req.body
+        });
+        res.status(500).json({ error: "Failed to log event", details: error.message });
     }
 });
 
@@ -903,7 +946,21 @@ function calculateReadingStats(readings) {
 }
 
 function calculateEventStats(events, type) {
+    // Log event stats calculation
+    console.log(`📊 Calculating stats for ${type} events:`, {
+        totalEvents: events.length,
+        eventsOfType: events.filter(e => e.type === type).length
+    });
+
     const typeEvents = events.filter(e => e.type === type);
+    
+    // Log filtered events for debugging
+    if (typeEvents.length === 0) {
+        console.log(`⚠️ No ${type} events found in date range`);
+    } else {
+        console.log(`✅ Found ${typeEvents.length} ${type} events`);
+    }
+
     return {
         total: typeEvents.length,
         byAction: typeEvents.reduce((acc, e) => {
@@ -911,7 +968,13 @@ function calculateEventStats(events, type) {
             return acc;
         }, {}),
         firstEvent: typeEvents[0]?.timestamp,
-        lastEvent: typeEvents[typeEvents.length - 1]?.timestamp
+        lastEvent: typeEvents[typeEvents.length - 1]?.timestamp,
+        // Add event details for debugging
+        events: typeEvents.map(e => ({
+            timestamp: moment(e.timestamp).format('YYYY-MM-DD HH:mm:ss'),
+            action: e.action,
+            details: e.details
+        }))
     };
 }
 
@@ -1008,7 +1071,6 @@ function generateEnhancedPDFReport(doc, data) {
     
     drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
 }
-
 
 // Add new helper function for report summary
 function drawReportSummary(doc, data, startY) {
