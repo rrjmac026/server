@@ -526,28 +526,18 @@ function drawTableRow(doc, data, x, y, width) {
 function drawPageHeader(doc, pageNumber, title) {
   const pageWidth = doc.page.width;
   
-  // Logo and title container
+  // Title container
   doc.rect(50, 30, pageWidth - 100, 70)
      .fill('#f9f9f9');
   
-  // Add logo
-  try {
-    doc.image('d:/Bayot FIles/Desktop/Server/assets/ic_new_icon.png', 60, 35, {
-      width: 50,
-      height: 50
-    });
-  } catch (error) {
-    console.warn('Warning: Logo file not found', error);
-  }
-  
-  // Title section
+  // Title section - adjusted positioning since there's no logo
   doc.font('Helvetica-Bold')
      .fontSize(24)
      .fillColor('#2e7d32')
-     .text('Plant Monitoring System', 120, 40)
+     .text('Plant Monitoring System', 60, 40)
      .fontSize(16)
      .fillColor('#666666')
-     .text('Detailed Report', 120, 65);
+     .text('Detailed Report', 60, 65);
   
   // Page number
   doc.fontSize(10)
