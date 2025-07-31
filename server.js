@@ -84,7 +84,8 @@ async function getLatestReading(plantId) {
         moisture: isConnected ? reading.moisture : 0,
         temperature: isConnected ? reading.temperature : 0,
         humidity: isConnected ? reading.humidity : 0,
-        moistureStatus: !isConnected ? "OFFLINE" : getMoistureStatus(reading.moisture)
+        moistureStatus: !isConnected ? "OFFLINE" : getMoistureStatus(reading.moisture),
+        timestamp: reading.timestamp // Return the raw timestamp
     };
 }
 
@@ -331,8 +332,17 @@ app.get("/api/reports", async (req, res) => {
       }
     }
 
-    // Rest of the existing PDF generation code...
-    // ...existing code...
+    if (format === 'pdf') {
+      // ... rest of the PDF generation code ...
+    } else {
+      const stats = calculateStats(readings);
+      res.json({ 
+        totalReadings: readings.length,
+        stats,
+        allReadings: readings
+      });
+    }
+
   } catch (error) {
     console.error("❌ Report generation error:", error);
     res.status(500).json({ 
@@ -358,11 +368,62 @@ app.get("/api/reports/:plantId", async (req, res) => {
       });
     }
 
-    console.log('Debug - Report Request:', { plantId, start, end, format });
+    // Fix: Parse dates correctly and set time to start/end of day
+    const startDate = moment.tz(start, 'Asia/Manila').startOf('day').toDate();
+    const endDate = moment.tz(end, 'Asia/Manila').endOf('day').toDate();
 
-    // Fetch all readings first
-    const readings = await getAllReadingsInRange(plantId, start, end);
+    console.log('Debug - Report Request:', { 
+      plantId, 
+      startDate: startDate.toISOString(), 
+      endDate: endDate.toISOString(),
+      format 
+    });
+
+    // Fix: Use the corrected dates in the query
+    const collection = await getCollection('sensor_data');
+    const readings = await collection.find({
+      plantId: plantId,
+      timestamp: {
+        $gte: startDate,
+        $lte: endDate
+      }
+    }).sort({ timestamp: -1 }).toArray();
+
     console.log(`Debug - Total readings found: ${readings.length}`);
+
+    if (readings.length === 0) {
+      if (format === 'pdf') {
+        // Return a PDF with "No Data" message
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename=plant-report-${plantId}.pdf`);
+        
+        const doc = new PDFDocument({ margin: 50 });
+        doc.pipe(res);
+        
+        drawPageHeader(doc, 1, 'Plant Monitoring Report');
+        
+        doc.moveDown(2)
+           .font('Helvetica-Bold')
+           .fontSize(14)
+           .text('No Data Available', { align: 'center' })
+           .moveDown()
+           .font('Helvetica')
+           .fontSize(12)
+           .text(`No readings found for Plant ${plantId} between ${moment(startDate).format('YYYY-MM-DD')} and ${moment(endDate).format('YYYY-MM-DD')}`, {
+             align: 'center'
+           });
+        
+        drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
+        doc.end();
+        return;
+      } else {
+        return res.json({ 
+          totalReadings: 0,
+          stats: null,
+          message: 'No readings found for the specified date range'
+        });
+      }
+    }
 
     if (format === 'pdf') {
       res.setHeader('Content-Type', 'application/pdf');
