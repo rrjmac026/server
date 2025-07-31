@@ -117,15 +117,28 @@ async function getReadingsInRange(plantId, startDate, endDate) {
 async function getAllReadingsInRange(plantId, startDate, endDate, progressCallback = null) {
     const collection = await getCollection('sensor_data');
     
-    const cursor = collection.find({
+    // Convert string dates to MongoDB Date objects and set time to start/end of day
+    const start = new Date(startDate);
+    start.setHours(0, 0, 0, 0);
+    
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+    
+    console.log('Debug - Query params:', {
         plantId,
-        timestamp: {
-            $gte: new Date(startDate),
-            $lte: new Date(endDate)
-        }
-    }).sort({ timestamp: -1 });
+        startDate: start,
+        endDate: end
+    });
 
-    const readings = await cursor.toArray();
+    const readings = await collection.find({
+        plantId: plantId,  // Explicitly match plantId
+        timestamp: {
+            $gte: start,
+            $lte: end
+        }
+    }).sort({ timestamp: -1 }).toArray();
+
+    console.log(`Debug - Found ${readings.length} readings`);
     
     if (progressCallback) {
         progressCallback(readings.length);
@@ -276,7 +289,18 @@ app.get("/api/reports", async (req, res) => {
 
     // Fetch all readings first
     const readings = await getAllReadingsInRange(plantId, start, end);
-    console.log(`Debug - Total readings found: ${readings.length}`);
+    console.log(`Debug - Total readings found: ${readings?.length || 0}`);
+
+    if (!readings || readings.length === 0) {
+      console.log('Debug - No readings found for criteria:', { plantId, start, end });
+      if (format === 'json') {
+        return res.json({ 
+          totalReadings: 0,
+          stats: calculateStats([]),
+          allReadings: []
+        });
+      }
+    }
 
     if (format === 'pdf') {
       res.setHeader('Content-Type', 'application/pdf');
@@ -365,7 +389,11 @@ app.get("/api/reports", async (req, res) => {
 
   } catch (error) {
     console.error("❌ Report generation error:", error);
-    res.status(500).json({ error: "Failed to generate report", details: error.message });
+    res.status(500).json({ 
+        error: "Failed to generate report", 
+        details: error.message,
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
 
@@ -386,9 +414,20 @@ app.get("/api/reports/:plantId", async (req, res) => {
 
     console.log('Debug - Report Request:', { plantId, start, end, format });
 
-    // Fetch all readings first
+    // Fetch all readings with debug logging
     const readings = await getAllReadingsInRange(plantId, start, end);
-    console.log(`Debug - Total readings found: ${readings.length}`);
+    console.log(`Debug - Total readings found: ${readings?.length || 0}`);
+
+    if (!readings || readings.length === 0) {
+      console.log('Debug - No readings found for criteria:', { plantId, start, end });
+      if (format === 'json') {
+        return res.json({ 
+          totalReadings: 0,
+          stats: calculateStats([]),
+          allReadings: []
+        });
+      }
+    }
 
     if (format === 'pdf') {
       res.setHeader('Content-Type', 'application/pdf');
@@ -471,7 +510,11 @@ app.get("/api/reports/:plantId", async (req, res) => {
 
   } catch (error) {
     console.error("❌ Report generation error:", error);
-    res.status(500).json({ error: "Failed to generate report", details: error.message });
+    res.status(500).json({ 
+        error: "Failed to generate report", 
+        details: error.message,
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
 
