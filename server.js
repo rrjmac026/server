@@ -84,8 +84,7 @@ async function getLatestReading(plantId) {
         moisture: isConnected ? reading.moisture : 0,
         temperature: isConnected ? reading.temperature : 0,
         humidity: isConnected ? reading.humidity : 0,
-        moistureStatus: !isConnected ? "OFFLINE" : getMoistureStatus(reading.moisture),
-        timestamp: reading.timestamp // Return the raw timestamp
+        moistureStatus: !isConnected ? "OFFLINE" : getMoistureStatus(reading.moisture)
     };
 }
 
@@ -116,34 +115,23 @@ async function getReadingsInRange(plantId, startDate, endDate) {
 }
 
 async function getAllReadingsInRange(plantId, startDate, endDate, progressCallback = null) {
-    try {
-        const collection = await getCollection('sensor_data');
-        console.log('Query params:', {
-            plantId,
-            startDate: startDate.toISOString(),
-            endDate: endDate.toISOString()
-        });
-        
-        const cursor = collection.find({
-            plantId,
-            timestamp: {
-                $gte: startDate,
-                $lte: endDate
-            }
-        }).sort({ timestamp: -1 });
-
-        const readings = await cursor.toArray();
-        console.log(`Found ${readings.length} readings`);
-        
-        if (progressCallback) {
-            progressCallback(readings.length);
+    const collection = await getCollection('sensor_data');
+    
+    const cursor = collection.find({
+        plantId,
+        timestamp: {
+            $gte: new Date(startDate),
+            $lte: new Date(endDate)
         }
-        
-        return readings;
-    } catch (error) {
-        console.error('Error in getAllReadingsInRange:', error);
-        throw error;
+    }).sort({ timestamp: -1 });
+
+    const readings = await cursor.toArray();
+    
+    if (progressCallback) {
+        progressCallback(readings.length);
     }
+    
+    return readings;
 }
 
 function calculateStats(readings) {
@@ -284,57 +272,89 @@ app.get("/api/reports", async (req, res) => {
       });
     }
 
-    // Fix: Parse dates correctly and set time to start/end of day
-    const startDate = moment(start).startOf('day').toDate();
-    const endDate = moment(end).endOf('day').toDate();
+    console.log('Debug - Report Request:', { plantId, start, end, format });
 
-    console.log('Debug - Report Request:', { 
-      plantId, 
-      startDate: startDate.toISOString(), 
-      endDate: endDate.toISOString() 
-    });
-
-    // Fix: Use the corrected dates in the query
-    const readings = await getAllReadingsInRange(plantId, startDate, endDate);
+    // Fetch all readings first
+    const readings = await getAllReadingsInRange(plantId, start, end);
     console.log(`Debug - Total readings found: ${readings.length}`);
 
-    if (readings.length === 0) {
-      if (format === 'pdf') {
-        // Return a PDF with "No Data" message
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename=plant-report-${plantId}.pdf`);
-        
-        const doc = new PDFDocument({ margin: 50 });
-        doc.pipe(res);
-        
-        drawPageHeader(doc, 1, 'Plant Monitoring Report');
-        
-        doc.moveDown(2)
-           .font('Helvetica-Bold')
-           .fontSize(14)
-           .text('No Data Available', { align: 'center' })
-           .moveDown()
-           .font('Helvetica')
-           .fontSize(12)
-           .text(`No readings found for Plant ${plantId} between ${moment(startDate).format('YYYY-MM-DD')} and ${moment(endDate).format('YYYY-MM-DD')}`, {
-             align: 'center'
-           });
-        
-        drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
-        doc.end();
-        return;
-      } else {
-        return res.json({ 
-          totalReadings: 0,
-          stats: null,
-          message: 'No readings found for the specified date range'
-        });
-      }
-    }
-
     if (format === 'pdf') {
-      // ... rest of the PDF generation code ...
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=plant-report-${plantId}.pdf`);
+      
+      const doc = new PDFDocument({ margin: 50 });
+      doc.pipe(res);
+
+      let currentY = drawPageHeader(doc, 1, 'Plant Monitoring Report');
+      currentY += 30; // Increased spacing after header
+
+      // Report details in a centered table
+      const reportDetailsWidth = 400;
+      const startX = (doc.page.width - reportDetailsWidth) / 2;
+      
+      // Details table background
+      doc.rect(startX, currentY, reportDetailsWidth, 80) // Increased height
+         .fillColor('#e8e8e8') // Darker background
+         .fill();
+      
+      // Add border to details table
+      doc.rect(startX, currentY, reportDetailsWidth, 80)
+         .strokeColor('#000000')
+         .lineWidth(1)
+         .stroke();
+      
+      doc.font('Helvetica')
+         .fontSize(11) // Slightly larger font
+         .fillColor('#000000');
+      
+      // Details rows with better spacing
+      const detailsData = [
+        ['Plant ID:', plantId, 'Generated:', moment().tz('Asia/Manila').format('YYYY-MM-DD LT')],
+        ['Period:', `${moment(start).format('YYYY-MM-DD')} to ${moment(end).format('YYYY-MM-DD')}`, 'Total Records:', readings.length.toString()]
+      ];
+      
+      detailsData.forEach((row, i) => {
+        const rowY = currentY + (i * 30) + 15; // Better vertical spacing
+        doc.font('Helvetica-Bold').text(row[0], startX + 20, rowY);
+        doc.font('Helvetica').text(row[1], startX + 100, rowY); // Adjusted X position
+        doc.font('Helvetica-Bold').text(row[2], startX + 220, rowY);
+        doc.font('Helvetica').text(row[3], startX + 300, rowY); // Adjusted X position
+      });
+      
+      currentY += 100; // Increased spacing after details
+
+      // Readings table with better spacing
+      const tableWidth = doc.page.width - 100;
+      const tableX = 50;
+      
+      const headers = ['Date & Time', 'Temperature', 'Humidity', 'Moisture', 'Status', 'Watering', 'Fertilizer'];
+      currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
+      
+      readings.forEach((reading, index) => {
+        if (currentY > doc.page.height - 100) { // More space for footer
+          doc.addPage();
+          currentY = drawPageHeader(doc, Math.floor(index / 15) + 2); // Fewer rows per page
+          currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
+        }
+        
+        const rowData = [
+          moment(reading.timestamp).format('MM-DD HH:mm'), // Shorter date format
+          `${reading.temperature || 'N/A'}°C`,
+          `${reading.humidity || 'N/A'}%`,
+          `${reading.moisture || 'N/A'}%`,
+          reading.moistureStatus || 'N/A',
+          reading.wateringStatus || '-',
+          reading.fertilizerStatus || '-'
+        ];
+        
+        currentY = drawTableRow(doc, rowData, tableX, currentY, tableWidth);
+      });
+      
+      drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
+      
+      doc.end();
     } else {
+      // JSON format - return all readings
       const stats = calculateStats(readings);
       res.json({ 
         totalReadings: readings.length,
@@ -345,11 +365,7 @@ app.get("/api/reports", async (req, res) => {
 
   } catch (error) {
     console.error("❌ Report generation error:", error);
-    res.status(500).json({ 
-      error: "Failed to generate report", 
-      details: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined 
-    });
+    res.status(500).json({ error: "Failed to generate report", details: error.message });
   }
 });
 
@@ -368,62 +384,11 @@ app.get("/api/reports/:plantId", async (req, res) => {
       });
     }
 
-    // Fix: Parse dates correctly and set time to start/end of day
-    const startDate = moment.tz(start, 'Asia/Manila').startOf('day').toDate();
-    const endDate = moment.tz(end, 'Asia/Manila').endOf('day').toDate();
+    console.log('Debug - Report Request:', { plantId, start, end, format });
 
-    console.log('Debug - Report Request:', { 
-      plantId, 
-      startDate: startDate.toISOString(), 
-      endDate: endDate.toISOString(),
-      format 
-    });
-
-    // Fix: Use the corrected dates in the query
-    const collection = await getCollection('sensor_data');
-    const readings = await collection.find({
-      plantId: plantId,
-      timestamp: {
-        $gte: startDate,
-        $lte: endDate
-      }
-    }).sort({ timestamp: -1 }).toArray();
-
+    // Fetch all readings first
+    const readings = await getAllReadingsInRange(plantId, start, end);
     console.log(`Debug - Total readings found: ${readings.length}`);
-
-    if (readings.length === 0) {
-      if (format === 'pdf') {
-        // Return a PDF with "No Data" message
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename=plant-report-${plantId}.pdf`);
-        
-        const doc = new PDFDocument({ margin: 50 });
-        doc.pipe(res);
-        
-        drawPageHeader(doc, 1, 'Plant Monitoring Report');
-        
-        doc.moveDown(2)
-           .font('Helvetica-Bold')
-           .fontSize(14)
-           .text('No Data Available', { align: 'center' })
-           .moveDown()
-           .font('Helvetica')
-           .fontSize(12)
-           .text(`No readings found for Plant ${plantId} between ${moment(startDate).format('YYYY-MM-DD')} and ${moment(endDate).format('YYYY-MM-DD')}`, {
-             align: 'center'
-           });
-        
-        drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
-        doc.end();
-        return;
-      } else {
-        return res.json({ 
-          totalReadings: 0,
-          stats: null,
-          message: 'No readings found for the specified date range'
-        });
-      }
-    }
 
     if (format === 'pdf') {
       res.setHeader('Content-Type', 'application/pdf');
