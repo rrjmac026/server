@@ -997,23 +997,31 @@ function generateEnhancedPDFReport(doc, data) {
     const waterWidth = doc.page.width - 100;
     currentY = drawTableHeader(doc, waterHeaders, 50, currentY, waterWidth);
     
-    data.events
-        .filter(e => e.type === 'watering')
-        .forEach(event => {
-            const rowData = [
-                moment(event.timestamp).format('YYYY-MM-DD HH:mm:ss'),
-                event.action.toUpperCase(),
-                event.details || '-'
-            ];
-            currentY = drawTableRow(doc, rowData, 50, currentY, waterWidth);
-            
-            // Add new page if needed
-            if (currentY > doc.page.height - 100) {
-                doc.addPage();
-                currentY = drawPageHeader(doc, 3, 'System Activity Logs');
-                currentY = drawTableHeader(doc, waterHeaders, 50, currentY, waterWidth);
-            }
-        });
+    // Filter watering events and ensure we can access them
+    const wateringEvents = data.events.filter(e => e.type === 'watering');
+    console.log(`Found ${wateringEvents.length} watering events`);
+    
+    wateringEvents.forEach(event => {
+        const rowData = [
+            moment(event.timestamp).format('YYYY-MM-DD HH:mm:ss'),
+            event.action.toUpperCase(),
+            event.details || '-'
+        ];
+        currentY = drawTableRow(doc, rowData, 50, currentY, waterWidth);
+        
+        // Add new page if needed
+        if (currentY > doc.page.height - 100) {
+            doc.addPage();
+            currentY = drawPageHeader(doc, 3, 'System Activity Logs');
+            currentY = drawTableHeader(doc, waterHeaders, 50, currentY, waterWidth);
+        }
+    });
+
+    // If no watering events, show message
+    if (wateringEvents.length === 0) {
+        doc.text('No watering events recorded in this period.', 50, currentY + 10);
+        currentY += 30;
+    }
 
     // Fertilizer Events Table
     doc.addPage();
@@ -1024,33 +1032,40 @@ function generateEnhancedPDFReport(doc, data) {
     const fertHeaders = ['Date & Time', 'Action', 'Details'];
     currentY = drawTableHeader(doc, fertHeaders, 50, currentY, waterWidth);
     
-    data.events
-        .filter(e => e.type === 'fertilizer')
-        .forEach(event => {
-            const rowData = [
-                moment(event.timestamp).format('YYYY-MM-DD HH:mm:ss'),
-                event.action.toUpperCase(),
-                event.details || '-'
-            ];
-            currentY = drawTableRow(doc, rowData, 50, currentY, waterWidth);
-            
-            // Add new page if needed
-            if (currentY > doc.page.height - 100) {
-                doc.addPage();
-                currentY = drawPageHeader(doc, 5, 'System Activity Logs');
-                currentY = drawTableHeader(doc, fertHeaders, 50, currentY, waterWidth);
-            }
-        });
+    // Filter fertilizer events and ensure we can access them
+    const fertilizerEvents = data.events.filter(e => e.type === 'fertilizer');
+    console.log(`Found ${fertilizerEvents.length} fertilizer events`);
+    
+    fertilizerEvents.forEach(event => {
+        const rowData = [
+            moment(event.timestamp).format('YYYY-MM-DD HH:mm:ss'),
+            event.action.toUpperCase(),
+            event.details || '-'
+        ];
+        currentY = drawTableRow(doc, rowData, 50, currentY, waterWidth);
+        
+        // Add new page if needed
+        if (currentY > doc.page.height - 100) {
+            doc.addPage();
+            currentY = drawPageHeader(doc, 5, 'System Activity Logs');
+            currentY = drawTableHeader(doc, fertHeaders, 50, currentY, waterWidth);
+        }
+    });
+
+    // If no fertilizer events, show message
+    if (fertilizerEvents.length === 0) {
+        doc.text('No fertilizer events recorded in this period.', 50, currentY + 10);
+        currentY += 30;
+    }
 
     // Sensor Readings Page
     doc.addPage();
     currentY = drawPageHeader(doc, 6, 'Sensor Readings');
     
-    // Add sensor readings table (existing code)
     const readingsHeaders = ['Date & Time', 'Temperature', 'Humidity', 'Moisture', 'Status'];
     currentY = drawTableHeader(doc, readingsHeaders, 50, currentY, waterWidth);
     
-    readings.forEach((reading, index) => {
+    data.readings.forEach((reading, index) => {
         const rowData = [
             moment(reading.timestamp).format('YYYY-MM-DD HH:mm:ss'),
             `${reading.temperature || 'N/A'}°C`,
@@ -1061,7 +1076,6 @@ function generateEnhancedPDFReport(doc, data) {
         
         currentY = drawTableRow(doc, rowData, 50, currentY, waterWidth);
         
-        // Add new page if needed
         if (currentY > doc.page.height - 70) {
             doc.addPage();
             currentY = drawPageHeader(doc, Math.floor(index / 20) + 7);
