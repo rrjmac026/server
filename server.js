@@ -574,44 +574,49 @@ function drawTableRow(doc, data, x, y, width) {
   
   const rowHeight = 22;
   
-  // Alternate row background - lighter but still visible
+  // Skip this row if it would overflow the page
+  if (y > doc.page.height - 75) {
+    return null; // Return null to indicate need for new page
+  }
+  
+  // Draw row background
   doc.fillColor('#f0f0f0')
      .rect(x, y, width, rowHeight)
      .fill();
 
-  // Row borders - dark for better definition
+  // Draw row border
   doc.strokeColor('#000000')
      .lineWidth(0.8)
      .rect(x, y, width, rowHeight)
      .stroke();
 
-  // Row data with proper positioning
+  // Draw cell contents
   let currentX = x;
   data.forEach((cell, i) => {
-    // Vertical line separators - dark
     if (i > 0) {
       doc.moveTo(currentX, y)
          .lineTo(currentX, y + rowHeight)
-         .strokeColor('#000000')
-         .lineWidth(0.8)
          .stroke();
     }
     
-    doc.fillColor('#000000') // Pure black text
+    doc.fillColor('#000000')
        .font('Helvetica')
-       .fontSize(9) // Slightly larger font for better readability
-       .text(cell.toString(), 
-             currentX + 3, // Small padding
-             y + 6, // Centered vertically
-             { 
-               width: cellWidths[i] - 6, // Account for padding
-               align: 'center',
-               lineBreak: false
-             });
+       .fontSize(9)
+       .text(
+         cell.toString(),
+         currentX + 3,
+         y + 6,
+         {
+           width: cellWidths[i] - 6,
+           align: 'center',
+           lineBreak: false
+         }
+       );
+    
     currentX += cellWidths[i];
   });
   
-  return y + rowHeight + 2; // Return next Y position with small spacing
+  return y + rowHeight + 2;
 }
 
 function drawPageHeader(doc, pageNumber, title) {
@@ -646,24 +651,8 @@ function drawPageHeader(doc, pageNumber, title) {
 }
 
 function drawPageFooter(doc, timestamp) {
-  doc.on('pageAdded', () => {
-    addFooter(doc, timestamp);
-  });
-  
-  // Add footer to the first page
-  addFooter(doc, timestamp);
-}
-
-function addFooter(doc, timestamp) {
   const pageWidth = doc.page.width;
   const footerY = doc.page.height - 50;
-  
-  // Save current state
-  doc.save();
-  
-  // Move to the bottom of the page
-  doc.x = 50;
-  doc.y = footerY;
   
   // Footer line
   doc.moveTo(50, footerY)
@@ -673,92 +662,154 @@ function addFooter(doc, timestamp) {
      .lineWidth(1.5)
      .stroke();
   
-  // Footer text container
-  const footerTexts = [
-    { text: `Generated on ${timestamp}`, align: 'left' },
-    { text: 'Plant Monitoring System', align: 'center' },
-    { text: 'Confidential Report', align: 'right' }
-  ];
-  
-  footerTexts.forEach(({ text, align }) => {
-    doc.fontSize(9)
-       .fillColor('#000000')
-       .text(
-         text,
-         50,
-         footerY + 10,
-         { 
-           align: align, 
-           width: pageWidth - 100 
-         }
-       );
-  });
-  
-  // Restore state
-  doc.restore();
+  // Footer text with fixed positions
+  doc.fontSize(9)
+     .fillColor('#000000');
+
+  // Left aligned text
+  doc.text(
+    `Generated on ${timestamp}`,
+    50,
+    footerY + 10,
+    { width: 200, align: 'left' }
+  );
+
+  // Center aligned text
+  doc.text(
+    'Plant Monitoring System',
+    pageWidth / 2 - 100,
+    footerY + 10,
+    { width: 200, align: 'center' }
+  );
+
+  // Right aligned text
+  doc.text(
+    'Confidential Report',
+    pageWidth - 250,
+    footerY + 10,
+    { width: 200, align: 'right' }
+  );
 }
 
 // Update the report generation logic to respect footer space
-function drawTableRow(doc, data, x, y, width) {
-  // Check if we need a new page
-  if (y > doc.page.height - 75) { // Leave space for footer
-    doc.addPage();
-    return doc.y; // Return the new Y position
-  }
-  
-  const cellWidths = [
-    width * 0.20, // Date & Time - 20%
-    width * 0.12, // Temperature - 12%
-    width * 0.12, // Humidity - 12%
-    width * 0.12, // Moisture - 12%
-    width * 0.15, // Status - 15%
-    width * 0.145, // Watering - 14.5%
-    width * 0.145  // Fertilizer - 14.5%
-  ];
-  
-  const rowHeight = 22;
-  
-  // Alternate row background - lighter but still visible
-  doc.fillColor('#f0f0f0')
-     .rect(x, y, width, rowHeight)
-     .fill();
-
-  // Row borders - dark for better definition
-  doc.strokeColor('#000000')
-     .lineWidth(0.8)
-     .rect(x, y, width, rowHeight)
-     .stroke();
-
-  // Row data with proper positioning
-  let currentX = x;
-  data.forEach((cell, i) => {
-    // Vertical line separators - dark
-    if (i > 0) {
-      doc.moveTo(currentX, y)
-         .lineTo(currentX, y + rowHeight)
-         .strokeColor('#000000')
-         .lineWidth(0.8)
-         .stroke();
-    }
+app.get("/api/reports/:plantId", async (req, res) => {
+  try {
+    const { plantId } = req.params;
+    const { start, end, format = 'pdf' } = req.query;
     
-    doc.fillColor('#000000') // Pure black text
-       .font('Helvetica')
-       .fontSize(9) // Slightly larger font for better readability
-       .text(cell.toString(), 
-             currentX + 3, // Small padding
-             y + 6, // Centered vertically
-             { 
-               width: cellWidths[i] - 6, // Account for padding
-               align: 'center',
-               lineBreak: false
-             });
-    currentX += cellWidths[i];
-  });
-  
-  return y + rowHeight + 2; // Return next Y position with small spacing
-}
+    if (!start || !end) {
+      return res.status(400).json({
+        error: "Missing parameters",
+        example: "/api/reports/PLANT123?start=2024-01-01&end=2024-01-31&format=pdf|json"
+      });
+    }
 
-// Add after the helper functions section
+    console.log('Debug - Report Request:', { plantId, start, end, format });
+
+    // Fetch all readings with debug logging
+    const readings = await getAllReadingsInRange(plantId, start, end);
+    console.log(`Debug - Total readings found: ${readings?.length || 0}`);
+
+    if (!readings || readings.length === 0) {
+      console.log('Debug - No readings found for criteria:', { plantId, start, end });
+      if (format === 'json') {
+        return res.json({ 
+          totalReadings: 0,
+          stats: calculateStats([]),
+          allReadings: []
+        });
+      }
+    }
+
+    if (format === 'pdf') {
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=plant-report-${plantId}.pdf`);
+      
+      const doc = new PDFDocument({ margin: 50 });
+      doc.pipe(res);
+
+      let currentY = drawPageHeader(doc, 1, 'Plant Monitoring Report');
+      currentY += 30;
+
+      // Report details in a centered table
+      const reportDetailsWidth = 400;
+      const startX = (doc.page.width - reportDetailsWidth) / 2;
+      
+      // Details table background
+      doc.rect(startX, currentY, reportDetailsWidth, 80) // Increased height
+         .fillColor('#f9f9f9')
+         .fill();
+      
+      doc.font('Helvetica')
+         .fontSize(10)
+         .fillColor('#000000');
+      
+      // Details rows with better spacing
+      const detailsData = [
+        ['Plant ID:', plantId, 'Generated:', moment().tz('Asia/Manila').format('YYYY-MM-DD LT')],
+        ['Period:', `${moment(start).format('YYYY-MM-DD')} to ${moment(end).format('YYYY-MM-DD')}`, 'Total Records:', readings.length.toString()]
+      ];
+      
+      detailsData.forEach((row, i) => {
+        const rowY = currentY + (i * 30) + 15; // Better vertical spacing
+        doc.font('Helvetica-Bold').text(row[0], startX + 20, rowY);
+        doc.font('Helvetica').text(row[1], startX + 100, rowY); // Adjusted X position
+        doc.font('Helvetica-Bold').text(row[2], startX + 220, rowY);
+        doc.font('Helvetica').text(row[3], startX + 300, rowY); // Adjusted X position
+      });
+      
+      currentY += 100; // Increased spacing after details
+
+      // Readings table with better spacing
+      const tableWidth = doc.page.width - 100;
+      const tableX = 50;
+      
+      const headers = ['Date & Time', 'Temperature', 'Humidity', 'Moisture', 'Status', 'Watering', 'Fertilizer'];
+      currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
+      
+      readings.forEach((reading, index) => {
+        if (currentY > doc.page.height - 100) { // More space for footer
+          doc.addPage();
+          currentY = drawPageHeader(doc, Math.floor(index / 15) + 2); // Fewer rows per page
+          currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
+        }
+        
+        const rowData = [
+          moment(reading.timestamp).format('MM-DD HH:mm'), // Shorter date format
+          `${reading.temperature || 'N/A'}°C`,
+          `${reading.humidity || 'N/A'}%`,
+          `${reading.moisture || 'N/A'}%`,
+          reading.moistureStatus || 'N/A',
+          reading.wateringStatus || '-',
+          reading.fertilizerStatus || '-'
+        ];
+        
+        currentY = drawTableRow(doc, rowData, tableX, currentY, tableWidth);
+      });
+      
+      drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
+      
+      doc.end();
+    } else {
+      // JSON format - return all readings
+      const stats = calculateStats(readings);
+      res.json({ 
+        totalReadings: readings.length,
+        stats,
+        allReadings: readings
+      });
+    }
+
+  } catch (error) {
+    console.error("❌ Report generation error:", error);
+    res.status(500).json({ 
+        error: "Failed to generate report", 
+        details: error.message,
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
+
 // ==========================
 // ✅ Audit Logs Endpoints
 // ==========================
