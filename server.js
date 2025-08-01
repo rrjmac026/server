@@ -701,15 +701,24 @@ app.post("/api/audit-logs", async (req, res) => {
     const collection = await getCollection('audit_logs');
     const logData = {
       ...req.body,
+      action: String(req.body.action || ''), // Ensure action is always a string
+      type: String(req.body.type || ''),     // Ensure type is always a string
       timestamp: new Date(),
-      status: req.body.status || 'success'
+      status: String(req.body.status || 'success')
     };
     
     const result = await collection.insertOne(logData);
-    res.status(201).json({ id: result.insertedId });
+    res.status(201).json({ 
+      success: true,
+      id: result.insertedId,
+      data: logData 
+    });
   } catch (error) {
     console.error("Error creating audit log:", error);
-    res.status(500).json({ error: "Failed to create audit log" });
+    res.status(500).json({ 
+      success: false, 
+      error: "Failed to create audit log" 
+    });
   }
 });
 
@@ -739,15 +748,27 @@ app.get("/api/audit-logs", async (req, res) => {
       collection.countDocuments(query)
     ]);
     
+    // Ensure all string fields are properly converted
+    const sanitizedLogs = logs.map(log => ({
+      ...log,
+      action: String(log.action || ''),
+      type: String(log.type || ''),
+      status: String(log.status || 'unknown')
+    }));
+    
     res.json({
       success: true,
-      logs,
+      logs: sanitizedLogs,
       total,
       page: parseInt(page),
       pages: Math.ceil(total / parseInt(limit))
     });
   } catch (error) {
-    res.status(500).json({ error: "Failed to fetch audit logs" });
+    res.status(500).json({ 
+      success: false, 
+      error: "Failed to fetch audit logs",
+      logs: [] 
+    });
   }
 });
 
@@ -755,17 +776,18 @@ app.get("/api/audit-logs", async (req, res) => {
 app.get("/api/audit-logs/actions", async (req, res) => {
   try {
     const collection = await getCollection('audit_logs');
-    const actions = await collection.distinct('action') || [];
+    let actions = await collection.distinct('action') || [];
     
-    // Ensure we never return null/undefined values
-    const validActions = actions
-      .filter(action => action != null && action !== '')
-      .map(action => String(action));
+    // Filter and sanitize actions
+    actions = actions
+      .filter(action => action != null) // Remove null/undefined
+      .map(action => String(action || '')) // Convert to string
+      .filter(action => action.length > 0); // Remove empty strings
     
     res.json({
       success: true,
       data: {
-        actions: validActions || []
+        actions: actions
       }
     });
   } catch (error) {
@@ -774,7 +796,7 @@ app.get("/api/audit-logs/actions", async (req, res) => {
       success: false, 
       error: "Failed to fetch actions",
       data: {
-        actions: []  // Always include empty array even in error case
+        actions: []
       }
     });
   }
@@ -788,20 +810,29 @@ app.get("/api/audit-logs/stats", async (req, res) => {
     const [total, typeStats, statusStats] = await Promise.all([
       collection.countDocuments(),
       collection.aggregate([
+        { $match: { type: { $ne: null } } }, // Exclude null types
         { $group: { _id: '$type', count: { $sum: 1 } } }
       ]).toArray(),
       collection.aggregate([
+        { $match: { status: { $ne: null } } }, // Exclude null statuses
         { $group: { _id: '$status', count: { $sum: 1 } } }
       ]).toArray()
     ]);
     
     res.json({
+      success: true,
       total,
-      byType: Object.fromEntries(typeStats.map(t => [t._id || 'unknown', t.count])),
-      byStatus: Object.fromEntries(statusStats.map(s => [s._id || 'unknown', s.count]))
+      byType: Object.fromEntries(typeStats.map(t => [String(t._id || 'unknown'), t.count])),
+      byStatus: Object.fromEntries(statusStats.map(s => [String(s._id || 'unknown'), s.count]))
     });
   } catch (error) {
-    res.status(500).json({ error: "Failed to fetch stats" });
+    res.status(500).json({ 
+      success: false, 
+      error: "Failed to fetch stats",
+      total: 0,
+      byType: {},
+      byStatus: {}
+    });
   }
 });
 
