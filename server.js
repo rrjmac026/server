@@ -746,6 +746,10 @@ app.get("/api/audit-logs", async (req, res) => {
         sort = 'desc' 
     } = req.query;
     
+    console.log('Fetching audit logs with params:', {
+        start, end, type, action, status, plantId, page, limit, sort
+    });
+    
     let query = {};
     
     // Apply filters
@@ -760,6 +764,8 @@ app.get("/api/audit-logs", async (req, res) => {
         if (start) query.timestamp.$gte = new Date(start);
         if (end) query.timestamp.$lte = new Date(end);
     }
+
+    console.log('MongoDB query:', JSON.stringify(query, null, 2));
     
     const skip = (parseInt(page) - 1) * parseInt(limit);
     
@@ -772,12 +778,14 @@ app.get("/api/audit-logs", async (req, res) => {
             .toArray(),
         collection.countDocuments(query)
     ]);
+
+    console.log(`Found ${logs.length} logs out of ${total} total`);
     
     res.json({
         success: true,
         logs: logs.map(log => ({
             ...log,
-            timestamp: moment(log.timestamp).tz('Asia/Manila').format()
+            timestamp: log.timestamp
         })),
         pagination: {
             total,
