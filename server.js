@@ -1573,11 +1573,16 @@ app.post('/api/schedules', async (req, res) => {
     const scheduleData = {
       ...req.body,
       enabled: req.body.enabled ?? true,
-      createdAt: new Date(),
-      updatedAt: new Date()
+      createdAt: moment().tz('Asia/Manila').toDate(),
+      updatedAt: moment().tz('Asia/Manila').toDate()
     };
     
     const result = await collection.insertOne(scheduleData);
+    const insertedSchedule = {
+      ...scheduleData,
+      _id: result.insertedId,
+      id: result.insertedId.toString() // Add id field for client compatibility
+    };
 
     // Create audit log entry
     const auditCollection = await getCollection('audit_logs');
@@ -1586,18 +1591,15 @@ app.post('/api/schedules', async (req, res) => {
       type: 'schedule',
       action: 'create',
       status: 'success',
-      timestamp: new Date(),
+      timestamp: moment().tz('Asia/Manila').toDate(),
       details: `Created ${scheduleData.type} schedule`,
       scheduleData: scheduleData
     });
 
     res.status(201).json({ 
       success: true, 
-      id: result.insertedId,
-      schedule: {
-        ...scheduleData,
-        _id: result.insertedId
-      }
+      id: result.insertedId.toString(),
+      schedule: insertedSchedule
     });
   } catch (error) {
     console.error('❌ Error creating schedule:', error);
