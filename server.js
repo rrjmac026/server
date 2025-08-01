@@ -315,6 +315,17 @@ app.get("/api/reports", async (req, res) => {
       });
     }
 
+    // Create audit log entry for report generation
+    const auditCollection = await getCollection('audit_logs');
+    await auditCollection.insertOne({
+      plantId: plantId,
+      type: 'report',
+      action: 'generate',
+      status: 'success',
+      timestamp: moment().tz('Asia/Manila').toDate(),
+      details: `Generated ${format.toUpperCase()} report from ${start} to ${end}`,
+    });
+
     console.log('Debug - Report Request:', { plantId, start, end, format });
 
     // Fetch all readings first
@@ -419,10 +430,26 @@ app.get("/api/reports", async (req, res) => {
 
   } catch (error) {
     console.error("❌ Report generation error:", error);
+    
+    // Log failed report generation
+    try {
+      const auditCollection = await getCollection('audit_logs');
+      await auditCollection.insertOne({
+        plantId: req.query.plantId,
+        type: 'report',
+        action: 'generate',
+        status: 'failed',
+        timestamp: moment().tz('Asia/Manila').toDate(),
+        details: `Failed to generate report: ${error.message}`,
+      });
+    } catch (auditError) {
+      console.error("Failed to log report generation error:", auditError);
+    }
+
     res.status(500).json({ 
-        error: "Failed to generate report", 
-        details: error.message,
-        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      error: "Failed to generate report", 
+      details: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 });
@@ -540,10 +567,26 @@ app.get("/api/reports/:plantId", async (req, res) => {
 
   } catch (error) {
     console.error("❌ Report generation error:", error);
+    
+    // Log failed report generation
+    try {
+      const auditCollection = await getCollection('audit_logs');
+      await auditCollection.insertOne({
+        plantId: req.query.plantId,
+        type: 'report',
+        action: 'generate',
+        status: 'failed',
+        timestamp: moment().tz('Asia/Manila').toDate(),
+        details: `Failed to generate report: ${error.message}`,
+      });
+    } catch (auditError) {
+      console.error("Failed to log report generation error:", auditError);
+    }
+
     res.status(500).json({ 
-        error: "Failed to generate report", 
-        details: error.message,
-        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      error: "Failed to generate report", 
+      details: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 });
