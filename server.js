@@ -698,26 +698,34 @@ function drawPageFooter(doc, timestamp) {
 // Create audit log
 app.post("/api/audit-logs", async (req, res) => {
   try {
-    const collection = await getCollection('audit_logs');
-    const logData = {
-      ...req.body,
-      action: String(req.body.action || ''), // Ensure action is always a string
-      type: String(req.body.type || ''),     // Ensure type is always a string
-      timestamp: new Date(),
-      status: String(req.body.status || 'success')
-    };
+    const data = req.body;
+    const validationError = validateAuditLog(data);
     
+    if (validationError) {
+        return res.status(400).json({ 
+            success: false, 
+            error: validationError 
+        });
+    }
+
+    const collection = await getCollection('audit_logs');
+    const logData = sanitizeAuditLog({
+        ...data,
+        timestamp: moment().tz('Asia/Manila').toDate()
+    });
+
     const result = await collection.insertOne(logData);
+    
     res.status(201).json({ 
-      success: true,
-      id: result.insertedId,
-      data: logData 
+        success: true,
+        id: result.insertedId,
+        data: logData 
     });
   } catch (error) {
     console.error("Error creating audit log:", error);
     res.status(500).json({ 
-      success: false, 
-      error: "Failed to create audit log" 
+        success: false, 
+        error: "Failed to create audit log" 
     });
   }
 });
@@ -726,115 +734,196 @@ app.post("/api/audit-logs", async (req, res) => {
 app.get("/api/audit-logs", async (req, res) => {
   try {
     const collection = await getCollection('audit_logs');
-    const { start, end, type, action, page = 1, limit = 20 } = req.query;
+    const { 
+        start, 
+        end, 
+        type, 
+        action, 
+        status,
+        plantId,
+        page = 1, 
+        limit = 20,
+        sort = 'desc' 
+    } = req.query;
     
     let query = {};
+    
+    // Apply filters
+    if (plantId) query.plantId = plantId;
+    if (type) query.type = type.toLowerCase();
+    if (action) query.action = action.toLowerCase();
+    if (status) query.status = status.toLowerCase();
+    
+    // Date range filter
+    if (start || end) {
+        query.timestamp = {};
+        if (start) query.timestamp.$gte = new Date(start);
+        if (end) query.timestamp.$lte = new Date(end);
+    }
+    
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    // Fetch logs and total count
+    const [logs, total] = await Promise.all([
+        collection.find(query)
+            .sort({ timestamp: sort === 'asc' ? 1 : -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .toArray(),
+        collection.countDocuments(query)
+    ]);
+    
+    res.json({
+        success: true,
+        logs: logs.map(log => ({
+            ...log,
+            timestamp: moment(log.timestamp).tz('Asia/Manila').format()
+        })),
+        pagination: {
+            total,
+            page: parseInt(page),
+            pages: Math.ceil(total / parseInt(limit)),
+            limit: parseInt(limit)
+        }
+    });
+  } catch (error) {
+    console.error("Error fetching audit logs:", error);
+    res.status(500).json({ 
+        success: false, 
+        error: "Failed to fetch audit logs",
+        logs: [] 
+    });
+  }
+});
+
+// Export audit logs (Add this before the Start Server section)
+app.get("/api/audit-logs/export", async (req, res) => {
+  try {
+    const { 
+      start, 
+      end, 
+      type, 
+      plantId, 
+      format = 'csv' 
+    } = req.query;
+
+    const collection = await getCollection('audit_logs');
+    let query = {};
+    
+    // Build query filters
+    if (plantId) query.plantId = plantId;
+    if (type) query.type = type.toLowerCase();
+    
+    // Date range filter
     if (start || end) {
       query.timestamp = {};
       if (start) query.timestamp.$gte = new Date(start);
       if (end) query.timestamp.$lte = new Date(end);
     }
-    if (type) query.type = type;
-    if (action) query.action = action;
-    
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-    
-    const [logs, total] = await Promise.all([
-      collection.find(query)
-        .sort({ timestamp: -1 })
-        .skip(skip)
-        .limit(parseInt(limit))
-        .toArray(),
-      collection.countDocuments(query)
-    ]);
-    
-    // Ensure all string fields are properly converted
-    const sanitizedLogs = logs.map(log => ({
-      ...log,
-      action: String(log.action || ''),
-      type: String(log.type || ''),
-      status: String(log.status || 'unknown')
-    }));
-    
-    res.json({
-      success: true,
-      logs: sanitizedLogs,
-      total,
-      page: parseInt(page),
-      pages: Math.ceil(total / parseInt(limit))
-    });
+
+    const logs = await collection.find(query)
+      .sort({ timestamp: -1 })
+      .toArray();
+
+    if (format === 'csv') {
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename=audit_logs_${moment().format('YYYY-MM-DD')}.csv`);
+      
+      // CSV header
+      res.write('Timestamp,Type,Action,Status,Plant ID,Details\n');
+      
+      // CSV rows
+      logs.forEach(log => {
+        const row = [
+          moment(log.timestamp).format('YYYY-MM-DD HH:mm:ss'),
+          log.type || '',
+          log.action || '',
+          log.status || '',
+          log.plantId || '',
+          log.details ? `"${log.details.replace(/"/g, '""')}"` : ''
+        ].join(',');
+        res.write(row + '\n');
+      });
+      
+      res.end();
+    } else {
+      res.json({
+        success: true,
+        logs: logs.map(log => ({
+          ...log,
+          timestamp: moment(log.timestamp).tz('Asia/Manila').format()
+        }))
+      });
+    }
   } catch (error) {
+    console.error("Error exporting audit logs:", error);
     res.status(500).json({ 
       success: false, 
-      error: "Failed to fetch audit logs",
-      logs: [] 
+      error: "Failed to export audit logs" 
     });
   }
+});
+
+// Get audit log types
+app.get("/api/audit-logs/types", async (req, res) => {
+    try {
+        const collection = await getCollection('audit_logs');
+        const types = await collection.distinct('type');
+        
+        res.json({
+            success: true,
+            types: types.filter(t => t).map(t => String(t).toLowerCase())
+        });
+    } catch (error) {
+        res.status(500).json({ 
+            success: false, 
+            error: "Failed to fetch log types",
+            types: []
+        });
+    }
 });
 
 // Get audit log actions
 app.get("/api/audit-logs/actions", async (req, res) => {
-  try {
-    const collection = await getCollection('audit_logs');
-    let actions = await collection.distinct('action') || [];
-    
-    // Filter and sanitize actions
-    actions = actions
-      .filter(action => action != null) // Remove null/undefined
-      .map(action => String(action || '')) // Convert to string
-      .filter(action => action.length > 0); // Remove empty strings
-    
-    res.json({
-      success: true,
-      data: {
-        actions: actions
-      }
-    });
-  } catch (error) {
-    console.error('Error fetching audit log actions:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: "Failed to fetch actions",
-      data: {
-        actions: []
-      }
-    });
-  }
+    try {
+        const collection = await getCollection('audit_logs');
+        const actions = await collection.distinct('action');
+        
+        res.json({
+            success: true,
+            actions: actions.filter(a => a).map(a => String(a).toLowerCase())
+        });
+    } catch (error) {
+        res.status(500).json({ 
+            success: false, 
+            error: "Failed to fetch actions",
+            actions: []
+        });
+    }
 });
 
-// Get audit log stats
-app.get("/api/audit-logs/stats", async (req, res) => {
-  try {
-    const collection = await getCollection('audit_logs');
-    
-    const [total, typeStats, statusStats] = await Promise.all([
-      collection.countDocuments(),
-      collection.aggregate([
-        { $match: { type: { $ne: null } } }, // Exclude null types
-        { $group: { _id: '$type', count: { $sum: 1 } } }
-      ]).toArray(),
-      collection.aggregate([
-        { $match: { status: { $ne: null } } }, // Exclude null statuses
-        { $group: { _id: '$status', count: { $sum: 1 } } }
-      ]).toArray()
-    ]);
-    
-    res.json({
-      success: true,
-      total,
-      byType: Object.fromEntries(typeStats.map(t => [String(t._id || 'unknown'), t.count])),
-      byStatus: Object.fromEntries(statusStats.map(s => [String(s._id || 'unknown'), s.count]))
-    });
-  } catch (error) {
-    res.status(500).json({ 
-      success: false, 
-      error: "Failed to fetch stats",
-      total: 0,
-      byType: {},
-      byStatus: {}
-    });
-  }
-});
+// Add these helper functions near the other helper functions
+function validateAuditLog(data) {
+    const requiredFields = ['plantId', 'type', 'action'];
+    for (const field of requiredFields) {
+        if (!data[field]) {
+            return `Missing required field: ${field}`;
+        }
+    }
+    return null;
+}
+
+function sanitizeAuditLog(log) {
+    return {
+        ...log,
+        type: String(log.type || '').toLowerCase(),
+        action: String(log.action || '').toLowerCase(),
+        status: String(log.status || 'success').toLowerCase(),
+        timestamp: log.timestamp || new Date(),
+        details: log.details || null,
+        sensorData: log.sensorData || null
+    };
+}
 
 // ==========================
 // ✅ Scheduling Functions
