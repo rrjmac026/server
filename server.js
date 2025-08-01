@@ -1547,14 +1547,13 @@ function sanitizeAuditLog(log) {
 
 // Helper function to validate schedule data
 function validateScheduleData(data) {
-  const { plantId, type, time, days, duration, enabled, label } = data;
-  
-  if (!plantId) return 'Plant ID is required';
-  if (!type || !['watering', 'fertilizing'].includes(type)) return 'Valid type (watering or fertilizing) is required';
-  if (!time || !time.match(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/)) return 'Valid time in HH:MM format is required';
-  if (!days || !Array.isArray(days) || days.length === 0) return 'At least one day of the week is required';
-  if (!duration || duration < 1 || duration > 60) return 'Duration must be between 1 and 60 minutes';
-  // Label is optional, no validation needed
+  // If any of these fields are missing or null, return specific error
+  if (!data) return 'Schedule data is required';
+  if (!data.plantId) return 'Plant ID is required';
+  if (!data.type || !['watering', 'fertilizing'].includes(data.type)) return 'Valid type (watering or fertilizing) is required';
+  if (!data.time || !/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/.test(data.time)) return 'Valid time in HH:MM format is required';
+  if (!Array.isArray(data.days) || data.days.length === 0) return 'At least one day of the week is required';
+  if (typeof data.duration !== 'number' || data.duration < 1 || data.duration > 60) return 'Duration must be between 1 and 60 minutes';
   
   return null; // No validation errors
 }
@@ -1562,21 +1561,51 @@ function validateScheduleData(data) {
 // Create a new schedule
 app.post('/api/schedules', async (req, res) => {
   try {
+    const validationError = validateScheduleData(req.body);
+    if (validationError) {
+      return res.status(400).json({ 
+        success: false, 
+        error: validationError 
+      });
+    }
+
     const collection = await getCollection('schedules');
     const scheduleData = {
       ...req.body,
-      createdAt: new Date()
+      enabled: req.body.enabled ?? true,
+      createdAt: new Date(),
+      updatedAt: new Date()
     };
     
     const result = await collection.insertOne(scheduleData);
+
+    // Create audit log entry
+    const auditCollection = await getCollection('audit_logs');
+    await auditCollection.insertOne({
+      plantId: scheduleData.plantId,
+      type: 'schedule',
+      action: 'create',
+      status: 'success',
+      timestamp: new Date(),
+      details: `Created ${scheduleData.type} schedule`,
+      scheduleData: scheduleData
+    });
+
     res.status(201).json({ 
       success: true, 
       id: result.insertedId,
-      schedule: scheduleData 
+      schedule: {
+        ...scheduleData,
+        _id: result.insertedId
+      }
     });
   } catch (error) {
     console.error('❌ Error creating schedule:', error);
-    res.status(500).json({ error: 'Failed to create schedule' });
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to create schedule',
+      details: error.message 
+    });
   }
 });
 
