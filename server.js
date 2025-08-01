@@ -54,6 +54,9 @@ async function saveSensorData(data) {
     const collection = await getCollection('sensor_data');
     const result = await collection.insertOne({
         ...data,
+        // Add explicit handling of states
+        waterState: data.waterState || false,
+        fertilizerState: data.fertilizerState || false,
         timestamp: moment().tz('Asia/Manila').toDate()
     });
     return result;
@@ -173,16 +176,18 @@ app.post("/api/sensor-data", async (req, res) => {
   try {
     const data = req.body;
 
-    // Optional: Validate incoming data
-    if (!data.plantId || data.moisture == null || data.temperature == null || data.humidity == null) {
+    // Update validation to include states
+    if (!data.plantId || data.moisture == null || data.temperature == null || 
+        data.humidity == null || data.waterState == null || data.fertilizerState == null) {
       return res.status(400).json({ error: "Incomplete sensor data" });
     }
 
     // Add explicit connection state from ESP32
-    data.isConnected = true;  // ESP32 only sends data when connected
+    data.isConnected = true;
     data.moistureStatus = getMoistureStatus(data.moisture);
+    data.waterState = Boolean(data.waterState);
+    data.fertilizerState = Boolean(data.fertilizerState);
 
-    // Save to Firestore
     const result = await saveSensorData(data);
     res.status(201).json({ message: "Sensor data saved", id: result.insertedId });
   } catch (error) {
@@ -210,6 +215,8 @@ app.get("/api/sensor-data", async (req, res) => {
         temperature: 0,
         humidity: 0,
         moistureStatus: "OFFLINE",
+        waterState: false,
+        fertilizerState: false,
         isOnline: false,
         isConnected: false,
         timestamp: null
@@ -221,6 +228,8 @@ app.get("/api/sensor-data", async (req, res) => {
       temperature: latestReading.isConnected ? latestReading.temperature : 0,
       humidity: latestReading.isConnected ? latestReading.humidity : 0,
       moistureStatus: latestReading.moistureStatus,
+      waterState: latestReading.isConnected ? latestReading.waterState : false,
+      fertilizerState: latestReading.isConnected ? latestReading.fertilizerState : false,
       timestamp: moment(latestReading.timestamp.toDate()).tz('Asia/Manila').format(),
       isOnline: latestReading.isConnected,
       isConnected: latestReading.isConnected

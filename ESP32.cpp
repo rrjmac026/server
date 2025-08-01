@@ -46,7 +46,7 @@ const char* password = "12345678";
 
 // Server Details
 const char* serverUrl = "http://192.168.1.8:3000/api/sensor-data";
-const char* serverUrl2 = "https://server-5527.onrender.com/api/sensor-data";
+const char* serverUrl2 = "https://server-ydsa.onrender.com/api/sensor-data";
 const char* FIXED_PLANT_ID = "C8dA5OfZEC1EGAhkdAB4";
 
 // NTP Server settings
@@ -650,6 +650,9 @@ const unsigned long STATUS_PRINT_INTERVAL = 5000;  // Print status every 5 secon
 bool lastWaterState = false;
 bool lastFertilizerState = false;
 
+// Add new global variable for diagnostics logging
+unsigned long lastDiagnosticsLog = 0;
+
 void loop() {
     unsigned long currentMillis = millis();
     static int moisturePercent = 0;  // Add this line to declare moisturePercent
@@ -821,13 +824,16 @@ void loop() {
         lastHeapCheck = currentMillis;
     }
 
+    // Log system diagnostics
+    logSystemDiagnostics();
+
     delay(100);
 }
 
-// Add new function to send event data
+// Add near the other helper functions
 void sendEventData(const char* type, const char* action, const char* details) {
     if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("❌ WiFi not connected");
+        Serial.println("❌ WiFi not connected - Event not sent");
         return;
     }
 
@@ -835,30 +841,71 @@ void sendEventData(const char* type, const char* action, const char* details) {
     doc["plantId"] = FIXED_PLANT_ID;
     doc["type"] = type;
     doc["action"] = action;
+    doc["status"] = "success";  // Add status field
     
     if (details) {
         doc["details"] = details;
     }
 
-    // Add current sensor readings
+    // Add more detailed sensor data
     JsonObject sensorData = doc.createNestedObject("sensorData");
     sensorData["moisture"] = convertToMoisturePercent(analogRead(soilMoisturePin));
     sensorData["temperature"] = dht.readTemperature();
     sensorData["humidity"] = dht.readHumidity();
+    sensorData["waterState"] = waterState;
+    sensorData["fertilizerState"] = fertilizerState;
+    sensorData["moistureStatus"] = getMoistureStatus(convertToMoisturePercent(analogRead(soilMoisturePin)));
+    sensorData["isConnected"] = WiFi.status() == WL_CONNECTED;
+    sensorData["signalStrength"] = WiFi.RSSI();
+    sensorData["gsmStatus"] = gsmStatus == GSM_READY ? "ready" : "error";
+
+    // Add system metrics
+    JsonObject systemData = doc.createNestedObject("systemData");
+    systemData["freeHeap"] = ESP.getFreeHeap();
+    systemData["uptime"] = millis() / 1000;
+    systemData["wifiSignal"] = WiFi.RSSI();
 
     String jsonString;
     serializeJson(doc, jsonString);
 
-    // Send to server
-    HTTPClient http;
-    http.begin(String(serverUrl) + "/events");
-    http.addHeader("Content-Type", "application/json");
+    // Try both servers
+    bool success = false;
     
-    int httpCode = http.POST(jsonString);
-    if (httpCode > 0) {
-        Serial.println("✅ Event logged successfully");
-    } else {
-        Serial.println("❌ Failed to log event");
+    // Try Render server first
+    WiFiClientSecure *client = new WiFiClientSecure;
+    if(client) {
+        client->setInsecure();
+        HTTPClient https;
+        https.begin(*client, String(serverUrl2) + "/audit-logs");
+        https.addHeader("Content-Type", "application/json");
+        
+        int httpCode = https.POST(jsonString);
+        success = (httpCode > 0 && httpCode < 400);
+        https.end();
+        delete client;
     }
-    http.end();
+
+    // Try local server if remote failed
+    if (!success) {
+        HTTPClient http;
+        http.begin(String(serverUrl) + "/audit-logs");
+        http.addHeader("Content-Type", "application/json");
+        
+        int httpCode = http.POST(jsonString);
+        success = (httpCode > 0 && httpCode < 400);
+        http.end();
+    }
+
+    Serial.println(success ? "✅ Event logged successfully" : "❌ Failed to log event");
+}
+
+// Add new helper function for logging system diagnostics
+void logSystemDiagnostics() {
+    if (millis() - lastDiagnosticsLog >= 3600000) { // Every hour
+        String details = "Free heap: " + String(ESP.getFreeHeap()) + 
+                        ", Uptime: " + String(millis() / 1000) + "s" +
+                        ", WiFi: " + String(WiFi.RSSI()) + "dBm";
+        sendEventData("system", "diagnostics", details.c_str());
+        lastDiagnosticsLog = millis();
+    }
 }
