@@ -972,11 +972,11 @@ function drawEnhancedAuditHeader(doc, pageNumber) {
      .fill()
      .fillOpacity(1);
   
-  // Logo text/icon
-  doc.fontSize(20)
+  // Logo text/icon - Using text instead of emoji
+  doc.fontSize(16)
      .fillColor('#ffffff')
      .font('Helvetica-Bold')
-     .text('🌱', logoX - 10, logoY - 10);
+     .text('PM', logoX - 8, logoY - 8);
   
   // Main title
   doc.fontSize(28)
@@ -1039,19 +1039,19 @@ function drawAuditSummarySection(doc, startY, logs, plantId, start, end, type) {
   
   // Card 1: Total Logs
   drawSummaryCard(doc, sectionX, currentY, cardWidth, cardHeight, 
-    'Total Logs', logs.length.toString(), '#4CAF50', '📊');
+    'Total Logs', logs.length.toString(), '#4CAF50', 'LOGS');
   
   // Card 2: Date Range
   const dateRange = start && end ? 
     `${moment(start).format('MMM DD')} - ${moment(end).format('MMM DD, YYYY')}` : 
     'All Time';
   drawSummaryCard(doc, sectionX + cardWidth + 15, currentY, cardWidth, cardHeight,
-    'Date Range', dateRange, '#2196F3', '📅');
+    'Date Range', dateRange, '#2196F3', 'DATE');
   
   // Card 3: Plant/Type Info
   const filterInfo = plantId ? `Plant ${plantId}` : (type ? type.toUpperCase() : 'All Types');
   drawSummaryCard(doc, sectionX + (cardWidth + 15) * 2, currentY, cardWidth, cardHeight,
-    'Filter', filterInfo, '#FF9800', '🔍');
+    'Filter', filterInfo, '#FF9800', 'FILTER');
   
   currentY += cardHeight + 30;
   
@@ -1096,9 +1096,10 @@ function drawSummaryCard(doc, x, y, width, height, title, value, color, icon) {
      .fillOpacity(1);
   
   // Icon
-  doc.fontSize(16)
+  doc.fontSize(9)
      .fillColor(color)
-     .text(icon, iconX + 7, iconY + 7);
+     .font('Helvetica-Bold')
+     .text(icon, iconX + 5, iconY + 12);
   
   // Title
   doc.fontSize(10)
@@ -1399,12 +1400,12 @@ function formatEnhancedSensorData(sensorData) {
   if (!sensorData) return '-';
   
   const items = [];
-  if (sensorData.moisture !== undefined) items.push(`💧 ${sensorData.moisture}%`);
-  if (sensorData.temperature !== undefined) items.push(`🌡️ ${sensorData.temperature}°C`);
-  if (sensorData.humidity !== undefined) items.push(`💨 ${sensorData.humidity}%`);
-  if (sensorData.moistureStatus) items.push(`📊 ${sensorData.moistureStatus}`);
-  if (sensorData.waterState !== undefined) items.push(`🚰 ${sensorData.waterState ? 'ON' : 'OFF'}`);
-  if (sensorData.fertilizerState !== undefined) items.push(`🌱 ${sensorData.fertilizerState ? 'ON' : 'OFF'}`);
+  if (sensorData.moisture !== undefined) items.push(`Moisture: ${sensorData.moisture}%`);
+  if (sensorData.temperature !== undefined) items.push(`Temp: ${sensorData.temperature}C`);
+  if (sensorData.humidity !== undefined) items.push(`Humidity: ${sensorData.humidity}%`);
+  if (sensorData.moistureStatus) items.push(`Status: ${sensorData.moistureStatus}`);
+  if (sensorData.waterState !== undefined) items.push(`Water: ${sensorData.waterState ? 'ON' : 'OFF'}`);
+  if (sensorData.fertilizerState !== undefined) items.push(`Fertilizer: ${sensorData.fertilizerState ? 'ON' : 'OFF'}`);
   
   return items.join('\n');
 }
