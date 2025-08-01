@@ -757,13 +757,15 @@ app.get("/api/audit-logs/actions", async (req, res) => {
     const collection = await getCollection('audit_logs');
     const actions = await collection.distinct('action') || [];
     
-    // Ensure we filter out any null or undefined values
-    const validActions = actions.filter(action => action != null);
+    // Ensure we never return null/undefined values
+    const validActions = actions
+      .filter(action => action != null && action !== '')
+      .map(action => String(action));
     
     res.json({
       success: true,
       data: {
-        actions: validActions
+        actions: validActions || []
       }
     });
   } catch (error) {
@@ -772,7 +774,7 @@ app.get("/api/audit-logs/actions", async (req, res) => {
       success: false, 
       error: "Failed to fetch actions",
       data: {
-        actions: []
+        actions: []  // Always include empty array even in error case
       }
     });
   }
