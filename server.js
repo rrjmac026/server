@@ -804,7 +804,7 @@ app.get("/api/audit-logs/export", async (req, res) => {
       end, 
       type, 
       plantId, 
-      format = 'csv' 
+      format = 'pdf' 
     } = req.query;
 
     const collection = await getCollection('audit_logs');
@@ -825,42 +825,92 @@ app.get("/api/audit-logs/export", async (req, res) => {
       .sort({ timestamp: -1 })
       .toArray();
 
-    if (format === 'csv') {
-      res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', `attachment; filename=audit_logs_${moment().format('YYYY-MM-DD')}.csv`);
+    if (format === 'pdf') {
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=audit_logs_${moment().format('YYYY-MM-DD')}.pdf`);
       
-      // CSV header
-      res.write('Timestamp,Type,Action,Status,Plant ID,Details\n');
+      const doc = new PDFDocument({ margin: 50 });
+      doc.pipe(res);
+
+      // Draw header
+      let currentY = drawPageHeader(doc, 1, 'Audit Logs Report');
+      currentY += 30;
+
+      // Report details
+      const reportDetailsWidth = 400;
+      const startX = (doc.page.width - reportDetailsWidth) / 2;
       
-      // CSV rows
-      logs.forEach(log => {
-        const row = [
-          moment(log.timestamp).format('YYYY-MM-DD HH:mm:ss'),
-          log.type || '',
-          log.action || '',
-          log.status || '',
-          log.plantId || '',
-          log.details ? `"${log.details.replace(/"/g, '""')}"` : ''
-        ].join(',');
-        res.write(row + '\n');
+      doc.rect(startX, currentY, reportDetailsWidth, 80)
+         .fillColor('#f9f9f9')
+         .fill();
+      
+      doc.rect(startX, currentY, reportDetailsWidth, 80)
+         .strokeColor('#000000')
+         .lineWidth(1)
+         .stroke();
+      
+      const detailsData = [
+        ['Plant ID:', plantId || 'All Plants', 'Generated:', moment().tz('Asia/Manila').format('YYYY-MM-DD LT')],
+        ['Period:', start && end ? `${moment(start).format('YYYY-MM-DD')} to ${moment(end).format('YYYY-MM-DD')}` : 'All Time', 'Total Logs:', logs.length.toString()]
+      ];
+      
+      detailsData.forEach((row, i) => {
+        const rowY = currentY + (i * 30) + 15;
+        doc.font('Helvetica-Bold').text(row[0], startX + 20, rowY);
+        doc.font('Helvetica').text(row[1], startX + 100, rowY);
+        doc.font('Helvetica-Bold').text(row[2], startX + 220, rowY);
+        doc.font('Helvetica').text(row[3], startX + 300, rowY);
       });
       
-      res.end();
-    } else {
-      res.json({
-        success: true,
-        logs: logs.map(log => ({
-          ...log,
-          timestamp: moment(log.timestamp).tz('Asia/Manila').format()
-        }))
+      currentY += 100;
+
+      // Table headers and data
+      const tableWidth = doc.page.width - 100;
+      const tableX = 50;
+      const headers = ['Timestamp', 'Type', 'Action', 'Status', 'Plant ID', 'Details'];
+      
+      currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
+      
+      logs.forEach((log, index) => {
+        if (currentY > doc.page.height - 100) {
+          doc.addPage();
+          currentY = drawPageHeader(doc, Math.floor(index / 15) + 2);
+          currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
+        }
+        
+        const rowData = [
+          moment(log.timestamp).format('MM-DD HH:mm'),
+          log.type || '-',
+          log.action || '-',
+          log.status || '-',
+          log.plantId || '-',
+          log.details || '-'
+        ];
+        
+        currentY = drawTableRow(doc, rowData, tableX, currentY, tableWidth);
       });
+      
+      drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
+      doc.end();
+      return;
     }
+
+    // JSON response as fallback
+    return res.json({
+      success: true,
+      logs: logs.map(log => ({
+        ...log,
+        timestamp: moment(log.timestamp).tz('Asia/Manila').format()
+      }))
+    });
   } catch (error) {
     console.error("Error exporting audit logs:", error);
-    res.status(500).json({ 
-      success: false, 
-      error: "Failed to export audit logs" 
-    });
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        success: false, 
+        error: "Failed to export audit logs" 
+      });
+    }
   }
 });
 
