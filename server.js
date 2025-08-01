@@ -880,13 +880,16 @@ app.get("/api/audit-logs", async (req, res) => {
 // Export audit logs (Add this before the Start Server section)
 app.get("/api/audit-logs/export", async (req, res) => {
   try {
-    const { 
-      start, 
-      end, 
-      type, 
-      plantId, 
-      format = 'pdf' 
-    } = req.query;
+    const { start, end, type, plantId, format = 'pdf' } = req.query;
+
+    // Force content type and headers for PDF
+    if (format.toLowerCase() === 'pdf') {
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 
+        `attachment; filename=audit_logs_${moment().format('YYYY-MM-DD')}.pdf`);
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Pragma', 'no-cache');
+    }
 
     const collection = await getCollection('audit_logs');
     let query = {};
