@@ -54,11 +54,32 @@ async function saveSensorData(data) {
     const collection = await getCollection('sensor_data');
     const result = await collection.insertOne({
         ...data,
-        // Add explicit handling of states
-        waterState: data.waterState || false,
-        fertilizerState: data.fertilizerState || false,
+        // Ensure waterState and fertilizerState are boolean values
+        waterState: Boolean(data.waterState),
+        fertilizerState: Boolean(data.fertilizerState),
         timestamp: moment().tz('Asia/Manila').toDate()
     });
+
+    // Also log this as an audit event
+    const auditCollection = await getCollection('audit_logs');
+    await auditCollection.insertOne({
+        plantId: data.plantId,
+        type: 'sensor',
+        action: 'read',
+        status: 'success',
+        timestamp: moment().tz('Asia/Manila').toDate(),
+        details: 'Sensor reading recorded',
+        sensorData: {
+            moisture: data.moisture,
+            temperature: data.temperature,
+            humidity: data.humidity,
+            moistureStatus: data.moistureStatus,
+            waterState: Boolean(data.waterState),
+            fertilizerState: Boolean(data.fertilizerState),
+            isConnected: data.isConnected
+        }
+    });
+
     return result;
 }
 
