@@ -940,13 +940,14 @@ app.get("/api/audit-logs/export", async (req, res) => {
       currentY += 80;
 
       // Table headers
-      const headers = ['Timestamp', 'Type', 'Action', 'Status', 'Details'];
+      const headers = ['Timestamp', 'Type', 'Action', 'Status', 'Details', 'Sensor Data'];
       const colWidths = [
-        reportWidth * 0.20, // Timestamp
-        reportWidth * 0.15, // Type
-        reportWidth * 0.20, // Action
-        reportWidth * 0.15, // Status
-        reportWidth * 0.30  // Details
+        reportWidth * 0.15, // Timestamp
+        reportWidth * 0.10, // Type
+        reportWidth * 0.15, // Action
+        reportWidth * 0.10, // Status
+        reportWidth * 0.25, // Details
+        reportWidth * 0.25  // Sensor Data
       ];
 
       // Draw table header
@@ -968,10 +969,19 @@ app.get("/api/audit-logs/export", async (req, res) => {
 
       currentY += 20;
 
-      // Draw table rows
+      // Draw table rows with sensor data
       logs.forEach((log, index) => {
+        // Calculate row height based on content
+        const detailsText = log.details || '-';
+        const sensorDataText = log.sensorData ? formatSensorData(log.sensorData) : '-';
+        const rowHeight = Math.max(
+          40,
+          estimateTextHeight(detailsText, doc) + 10,
+          estimateTextHeight(sensorDataText, doc) + 10
+        );
+
         // Check if we need a new page
-        if (currentY > doc.page.height - 50) {
+        if (currentY > doc.page.height - rowHeight) {
           doc.addPage();
           currentY = 50;
           
@@ -997,7 +1007,7 @@ app.get("/api/audit-logs/export", async (req, res) => {
         // Alternate row colors
         if (index % 2 === 0) {
           doc.fillColor('#f9f9f9')
-             .rect(startX, currentY, reportWidth, 20)
+             .rect(startX, currentY, reportWidth, rowHeight)
              .fill();
         }
 
@@ -1008,7 +1018,8 @@ app.get("/api/audit-logs/export", async (req, res) => {
           log.type || '-',
           log.action || '-',
           log.status || '-',
-          log.details || '-'
+          detailsText,
+          sensorDataText
         ].forEach((text, i) => {
           doc.fillColor('#000000')
              .font('Helvetica')
@@ -1016,12 +1027,12 @@ app.get("/api/audit-logs/export", async (req, res) => {
              .text(text, xPos + 5, currentY + 5, {
                width: colWidths[i] - 10,
                align: 'left',
-               lineBreak: false
+               lineBreak: true
              });
           xPos += colWidths[i];
         });
 
-        currentY += 20;
+        currentY += rowHeight;
       });
 
       // Add footer
@@ -1231,3 +1242,42 @@ app.delete('/api/schedules/:scheduleId', async (req, res) => {
 app.listen(port, () => {
   console.log(`✅ Server started at http://localhost:${port}`);
 });
+
+// Add these helper functions for the PDF export
+function formatSensorData(sensorData) {
+  if (!sensorData) return '-';
+  
+  const lines = [];
+  if (sensorData.moisture !== undefined) lines.push(`Moisture: ${sensorData.moisture}%`);
+  if (sensorData.temperature !== undefined) lines.push(`Temp: ${sensorData.temperature}°C`);
+  if (sensorData.humidity !== undefined) lines.push(`Humidity: ${sensorData.humidity}%`);
+  if (sensorData.moistureStatus) lines.push(`Status: ${sensorData.moistureStatus}`);
+  if (sensorData.waterState !== undefined) lines.push(`Water: ${sensorData.waterState ? 'ON' : 'OFF'}`);
+  if (sensorData.fertilizerState !== undefined) lines.push(`Fertilizer: ${sensorData.fertilizerState ? 'ON' : 'OFF'}`);
+  
+  return lines.join('\n');
+}
+
+function estimateTextHeight(text, doc) {
+  const fontSize = 9;
+  const lineHeight = fontSize * 1.2;
+  const maxWidth = 150; // Adjust based on your column width
+  
+  const words = text.split(' ');
+  let currentLine = '';
+  let lines = 1;
+  
+  for (const word of words) {
+    const testLine = currentLine + word + ' ';
+    const width = doc.widthOfString(testLine);
+    
+    if (width > maxWidth) {
+      currentLine = word + ' ';
+      lines++;
+    } else {
+      currentLine = testLine;
+    }
+  }
+  
+  return lines * lineHeight;
+}
