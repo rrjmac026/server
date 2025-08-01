@@ -691,143 +691,105 @@ function drawPageFooter(doc, timestamp) {
   );
 }
 
-// ==========================
-// ✅ Audit Logs Endpoints
+// ========================== 
+// ✅ Audit Log Endpoints
 // ==========================
 
-// Get audit logs with stats and filtering
-app.get('/api/audit-logs', async (req, res) => {
-    try {
-        const collection = await getCollection('audit_logs');
-        const { start, end, type, action, page = 1, limit = 20 } = req.query;
-        
-        let query = {};
-        
-        // Build query filters
-        if (start || end) {
-            query.timestamp = {};
-            if (start) query.timestamp.$gte = new Date(start);
-            if (end) query.timestamp.$lte = new Date(end);
-        }
-        if (type) query.type = type;
-        if (action) query.action = action;
-        
-        const skip = (parseInt(page) - 1) * parseInt(limit);
-        
-        // Execute query with proper error handling
-        const [logs, total] = await Promise.all([
-            collection
-                .find(query)
-                .sort({ timestamp: -1 })
-                .skip(skip)
-                .limit(parseInt(limit))
-                .toArray(),
-            collection.countDocuments(query)
-        ]);
-            
-        res.json({
-            success: true,
-            data: {
-                logs,
-                total,
-                page: parseInt(page),
-                pages: Math.ceil(total / parseInt(limit))
-            }
-        });
-    } catch (error) {
-        console.error('Error fetching audit logs:', error);
-        res.status(500).json({ 
-            success: false, 
-            error: 'Failed to fetch audit logs',
-            message: error.message 
-        });
-    }
+// Create audit log
+app.post("/api/audit-logs", async (req, res) => {
+  try {
+    const collection = await getCollection('audit_logs');
+    const logData = {
+      ...req.body,
+      timestamp: new Date(),
+      status: req.body.status || 'success'
+    };
+    
+    const result = await collection.insertOne(logData);
+    res.status(201).json({ id: result.insertedId });
+  } catch (error) {
+    console.error("Error creating audit log:", error);
+    res.status(500).json({ error: "Failed to create audit log" });
+  }
 });
 
-// Get audit logs stats
-app.get('/api/audit-logs/stats', async (req, res) => {
-    try {
-        const collection = await getCollection('audit_logs');
-        
-        const [totalCount, typeStats, statusStats] = await Promise.all([
-            collection.countDocuments(),
-            collection.aggregate([
-                {
-                    $group: {
-                        _id: '$type',
-                        count: { $sum: 1 }
-                    }
-                }
-            ]).toArray(),
-            collection.aggregate([
-                {
-                    $group: {
-                        _id: '$status',
-                        count: { $sum: 1 }
-                    }
-                }
-            ]).toArray()
-        ]);
-
-        const byType = Object.fromEntries(
-            typeStats.map(t => [t._id || 'unknown', t.count])
-        );
-
-        const byStatus = Object.fromEntries(
-            statusStats.map(s => [s._id || 'unknown', s.count])
-        );
-
-        res.json({
-            success: true,
-            data: {
-                total: totalCount,
-                byType,
-                byStatus: {
-                    success: byStatus.success || 0,
-                    error: byStatus.error || 0
-                }
-            }
-        });
-    } catch (error) {
-        console.error('Error fetching audit log stats:', error);
-        res.status(500).json({ 
-            success: false, 
-            error: 'Failed to fetch audit log stats',
-            message: error.message 
-        });
+// Get audit logs
+app.get("/api/audit-logs", async (req, res) => {
+  try {
+    const collection = await getCollection('audit_logs');
+    const { start, end, type, action, page = 1, limit = 20 } = req.query;
+    
+    let query = {};
+    if (start || end) {
+      query.timestamp = {};
+      if (start) query.timestamp.$gte = new Date(start);
+      if (end) query.timestamp.$lte = new Date(end);
     }
+    if (type) query.type = type;
+    if (action) query.action = action;
+    
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    const [logs, total] = await Promise.all([
+      collection.find(query)
+        .sort({ timestamp: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .toArray(),
+      collection.countDocuments(query)
+    ]);
+    
+    res.json({
+      success: true,
+      logs,
+      total,
+      page: parseInt(page),
+      pages: Math.ceil(total / parseInt(limit))
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch audit logs" });
+  }
 });
 
-// Get unique audit log actions
-app.get('/api/audit-logs/actions', async (req, res) => {
-    try {
-        const collection = await getCollection('audit_logs');
-        let actions = await collection.distinct('action');
-        
-        // Ensure actions is always an array and filter out invalid values
-        actions = Array.isArray(actions) ? actions : [];
-        actions = actions.filter(action => action && typeof action === 'string');
-        
-        // Sort actions alphabetically
-        actions.sort();
-        
-        res.json({
-            success: true,
-            data: {
-                actions: actions
-            }
-        });
-    } catch (error) {
-        console.error('Error fetching audit log actions:', error);
-        // Return empty array instead of error to prevent client crashes
-        res.json({ 
-            success: true, 
-            data: {
-                actions: []
-            },
-            warning: 'Failed to fetch actions, returning empty list'
-        });
-    }
+// Get audit log actions
+app.get("/api/audit-logs/actions", async (req, res) => {
+  try {
+    const collection = await getCollection('audit_logs');
+    const actions = await collection.distinct('action');
+    res.json({
+      success: true,
+      data: {
+        actions: actions || []
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch actions" });
+  }
+});
+
+// Get audit log stats
+app.get("/api/audit-logs/stats", async (req, res) => {
+  try {
+    const collection = await getCollection('audit_logs');
+    
+    const [total, typeStats, statusStats] = await Promise.all([
+      collection.countDocuments(),
+      collection.aggregate([
+        { $group: { _id: '$type', count: { $sum: 1 } } }
+      ]).toArray(),
+      collection.aggregate([
+        { $group: { _id: '$status', count: { $sum: 1 } } }
+      ]).toArray()
+    ]);
+    
+    res.json({
+      total,
+      byType: Object.fromEntries(typeStats.map(t => [t._id || 'unknown', t.count])),
+      byStatus: Object.fromEntries(statusStats.map(s => [s._id || 'unknown', s.count]))
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch stats" });
+  }
 });
 
 // ==========================
