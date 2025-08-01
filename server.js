@@ -818,11 +818,9 @@ app.get("/api/audit-logs/export", async (req, res) => {
     const collection = await getCollection('audit_logs');
     let query = {};
     
-    // Build query filters
     if (plantId) query.plantId = plantId;
     if (type) query.type = type.toLowerCase();
     
-    // Date range filter
     if (start || end) {
       query.timestamp = {};
       if (start) query.timestamp.$gte = new Date(start);
@@ -833,7 +831,8 @@ app.get("/api/audit-logs/export", async (req, res) => {
       .sort({ timestamp: -1 })
       .toArray();
 
-    if (format === 'pdf') {
+    if (format.toLowerCase() === 'pdf') {
+      // Force content type and attachment
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename=audit_logs_${moment().format('YYYY-MM-DD')}.pdf`);
       
@@ -844,67 +843,120 @@ app.get("/api/audit-logs/export", async (req, res) => {
       let currentY = drawPageHeader(doc, 1, 'Audit Logs Report');
       currentY += 30;
 
-      // Report details
-      const reportDetailsWidth = 400;
-      const startX = (doc.page.width - reportDetailsWidth) / 2;
-      
-      doc.rect(startX, currentY, reportDetailsWidth, 80)
-         .fillColor('#f9f9f9')
-         .fill();
-      
-      doc.rect(startX, currentY, reportDetailsWidth, 80)
-         .strokeColor('#000000')
-         .lineWidth(1)
-         .stroke();
-      
-      const detailsData = [
-        ['Plant ID:', plantId || 'All Plants', 'Generated:', moment().tz('Asia/Manila').format('YYYY-MM-DD LT')],
-        ['Period:', start && end ? `${moment(start).format('YYYY-MM-DD')} to ${moment(end).format('YYYY-MM-DD')}` : 'All Time', 'Total Logs:', logs.length.toString()]
-      ];
-      
-      detailsData.forEach((row, i) => {
-        const rowY = currentY + (i * 30) + 15;
-        doc.font('Helvetica-Bold').text(row[0], startX + 20, rowY);
-        doc.font('Helvetica').text(row[1], startX + 100, rowY);
-        doc.font('Helvetica-Bold').text(row[2], startX + 220, rowY);
-        doc.font('Helvetica').text(row[3], startX + 300, rowY);
-      });
-      
-      currentY += 100;
+      // Report metadata section
+      const reportWidth = doc.page.width - 100;
+      const startX = 50;
 
-      // Table headers and data
-      const tableWidth = doc.page.width - 100;
-      const tableX = 50;
-      const headers = ['Timestamp', 'Type', 'Action', 'Status', 'Plant ID', 'Details'];
-      
-      currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
-      
+      // Add metadata box
+      doc.rect(startX, currentY, reportWidth, 60)
+         .fillColor('#f5f5f5')
+         .fill()
+         .strokeColor('#000000')
+         .stroke();
+
+      // Add metadata content
+      doc.fillColor('#000000')
+         .fontSize(10)
+         .font('Helvetica-Bold')
+         .text(`Plant ID: ${plantId || 'All Plants'}`, startX + 15, currentY + 15)
+         .text(`Period: ${start && end ? `${moment(start).format('YYYY-MM-DD')} to ${moment(end).format('YYYY-MM-DD')}` : 'All Time'}`, startX + 15, currentY + 35);
+
+      currentY += 80;
+
+      // Table headers
+      const headers = ['Timestamp', 'Type', 'Action', 'Status', 'Details'];
+      const colWidths = [
+        reportWidth * 0.20, // Timestamp
+        reportWidth * 0.15, // Type
+        reportWidth * 0.20, // Action
+        reportWidth * 0.15, // Status
+        reportWidth * 0.30  // Details
+      ];
+
+      // Draw table header
+      doc.fillColor('#1a4e1a')
+         .rect(startX, currentY, reportWidth, 20)
+         .fill();
+
+      let xPos = startX;
+      headers.forEach((header, i) => {
+        doc.fillColor('#ffffff')
+           .font('Helvetica-Bold')
+           .fontSize(10)
+           .text(header, xPos + 5, currentY + 5, {
+             width: colWidths[i],
+             align: 'left'
+           });
+        xPos += colWidths[i];
+      });
+
+      currentY += 20;
+
+      // Draw table rows
       logs.forEach((log, index) => {
-        if (currentY > doc.page.height - 100) {
+        // Check if we need a new page
+        if (currentY > doc.page.height - 50) {
           doc.addPage();
-          currentY = drawPageHeader(doc, Math.floor(index / 15) + 2);
-          currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
+          currentY = 50;
+          
+          // Redraw header on new page
+          doc.fillColor('#1a4e1a')
+             .rect(startX, currentY, reportWidth, 20)
+             .fill();
+
+          xPos = startX;
+          headers.forEach((header, i) => {
+            doc.fillColor('#ffffff')
+               .font('Helvetica-Bold')
+               .fontSize(10)
+               .text(header, xPos + 5, currentY + 5, {
+               width: colWidths[i],
+               align: 'left'
+            });
+            xPos += colWidths[i];
+          });
+          currentY += 20;
         }
-        
-        const rowData = [
-          moment(log.timestamp).format('MM-DD HH:mm'),
+
+        // Alternate row colors
+        if (index % 2 === 0) {
+          doc.fillColor('#f9f9f9')
+             .rect(startX, currentY, reportWidth, 20)
+             .fill();
+        }
+
+        // Draw row data
+        xPos = startX;
+        [
+          moment(log.timestamp).format('YYYY-MM-DD HH:mm'),
           log.type || '-',
           log.action || '-',
           log.status || '-',
-          log.plantId || '-',
           log.details || '-'
-        ];
-        
-        currentY = drawTableRow(doc, rowData, tableX, currentY, tableWidth);
+        ].forEach((text, i) => {
+          doc.fillColor('#000000')
+             .font('Helvetica')
+             .fontSize(9)
+             .text(text, xPos + 5, currentY + 5, {
+               width: colWidths[i] - 10,
+               align: 'left',
+               lineBreak: false
+             });
+          xPos += colWidths[i];
+        });
+
+        currentY += 20;
       });
-      
+
+      // Add footer
       drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
+
       doc.end();
       return;
     }
 
-    // JSON response as fallback
-    return res.json({
+    // JSON format as fallback
+    res.json({
       success: true,
       logs: logs.map(log => ({
         ...log,
