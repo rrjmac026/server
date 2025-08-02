@@ -305,10 +305,16 @@ bool syncTime() {
     return false;
 }
 
-// Update the server communication function
-void sendDataToServer(int moisture, bool waterState, float temperature, float humidity) {
+// Replace the server communication function
+void sendDataToServer(int moisture, bool waterState, float temperature, float humidity, bool isHeartbeat = false) {
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("❌ WiFi not connected");
+        return;
+    }
+
+    // Skip invalid DHT readings
+    if (isnan(temperature) || isnan(humidity)) {
+        Serial.println("❌ Invalid DHT readings, skipping transmission");
         return;
     }
 
@@ -330,7 +336,8 @@ void sendDataToServer(int moisture, bool waterState, float temperature, float hu
     doc["waterState"] = waterState;
     doc["fertilizerState"] = fertilizerState;
     doc["timestamp"] = timestamp;
-    doc["isConnected"] = true;  // Add explicit connection state
+    doc["isConnected"] = true;
+    doc["heartbeat"] = isHeartbeat;  // Add heartbeat field
 
     String jsonString;
     serializeJson(doc, jsonString);
@@ -391,6 +398,20 @@ void sendDataToServer(int moisture, bool waterState, float temperature, float hu
             Serial.println("✅ Local server response: " + response);
         }
         http.end();
+    }
+
+    if (success) {
+        // Update last sent values only on successful transmission
+        lastSentTemp = temperature;
+        lastSentHumidity = humidity;
+        lastSentMoisture = convertToMoisturePercent(moisture);
+        lastHeartbeatTime = currentMillis;
+
+        if (isHeartbeat) {
+            Serial.println("💓 Heartbeat sent successfully");
+        } else {
+            Serial.println("📡 Sensor update sent successfully");
+        }
     }
 }
 
@@ -653,6 +674,18 @@ bool lastFertilizerState = false;
 // Add new global variable for diagnostics logging
 unsigned long lastDiagnosticsLog = 0;
 
+// Add these with other global variables
+float lastSentTemp = 0;
+float lastSentHumidity = 0;
+int lastSentMoisture = 0;
+unsigned long lastHeartbeatTime = 0;
+
+// Define thresholds
+const float TEMP_THRESHOLD = 0.5;     // ±0.5°C
+const float HUMIDITY_THRESHOLD = 3.0;  // ±3%
+const float MOISTURE_THRESHOLD = 5.0;  // ±5%
+const unsigned long HEARTBEAT_INTERVAL = 600000;  // 10 minutes in milliseconds
+
 void loop() {
     unsigned long currentMillis = millis();
     static int moisturePercent = 0;  // Add this line to declare moisturePercent
@@ -707,8 +740,10 @@ void loop() {
 
     // Send data every 30 seconds
     if (currentMillis - lastSendTime >= SEND_INTERVAL) {
-        sendDataToServer(soilMoistureValue, waterState, temperature, humidity);
+        sendDataToServer(soilMoistureValue, waterState, temperature, humidity, false);
         lastSendTime = currentMillis;
+    } else if (currentMillis - lastHeartbeatTime >= HEARTBEAT_INTERVAL) {
+        sendDataToServer(soilMoistureValue, waterState, temperature, humidity, true);
     }
 
     resumeWatchdog();

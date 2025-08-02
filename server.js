@@ -54,10 +54,10 @@ async function saveSensorData(data) {
     const collection = await getCollection('sensor_data');
     const result = await collection.insertOne({
         ...data,
-        // Ensure waterState and fertilizerState are boolean values
         waterState: Boolean(data.waterState),
         fertilizerState: Boolean(data.fertilizerState),
-        timestamp: moment().tz('Asia/Manila').toDate()
+        timestamp: data.timestamp ? new Date(data.timestamp) : moment().tz('Asia/Manila').toDate(),
+        heartbeat: Boolean(data.heartbeat)
     });
 
     // Also log this as an audit event
@@ -65,10 +65,10 @@ async function saveSensorData(data) {
     await auditCollection.insertOne({
         plantId: data.plantId,
         type: 'sensor',
-        action: 'read',
+        action: data.heartbeat ? 'heartbeat' : 'read',
         status: 'success',
         timestamp: moment().tz('Asia/Manila').toDate(),
-        details: 'Sensor reading recorded',
+        details: data.heartbeat ? 'Heartbeat received' : 'Sensor reading recorded',
         sensorData: {
             moisture: data.moisture,
             temperature: data.temperature,
@@ -76,7 +76,8 @@ async function saveSensorData(data) {
             moistureStatus: data.moistureStatus,
             waterState: Boolean(data.waterState),
             fertilizerState: Boolean(data.fertilizerState),
-            isConnected: data.isConnected
+            isConnected: data.isConnected,
+            heartbeat: Boolean(data.heartbeat)
         }
     });
 
@@ -197,19 +198,26 @@ app.post("/api/sensor-data", async (req, res) => {
   try {
     const data = req.body;
 
-    // Update validation to include states
     if (!data.plantId || data.moisture == null || data.temperature == null || 
         data.humidity == null || data.waterState == null || data.fertilizerState == null) {
       return res.status(400).json({ error: "Incomplete sensor data" });
     }
 
-    // Add explicit connection state from ESP32
     data.isConnected = true;
     data.moistureStatus = getMoistureStatus(data.moisture);
     data.waterState = Boolean(data.waterState);
     data.fertilizerState = Boolean(data.fertilizerState);
+    data.heartbeat = Boolean(data.heartbeat);
 
     const result = await saveSensorData(data);
+    
+    // Log different messages based on heartbeat status
+    if (data.heartbeat) {
+      console.log(`💓 Heartbeat received from plant ${data.plantId}`);
+    } else {
+      console.log(`📡 New sensor reading from plant ${data.plantId}`);
+    }
+
     res.status(201).json({ message: "Sensor data saved", id: result.insertedId });
   } catch (error) {
     console.error("❌ Error saving sensor data:", error.message);
