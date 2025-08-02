@@ -1555,20 +1555,19 @@ function sanitizeAuditLog(log) {
 
 // Helper function to validate schedule data
 function validateScheduleData(data) {
-  // If any of these fields are missing or null, return specific error
   if (!data) return 'Schedule data is required';
   if (!data.plantId) return 'Plant ID is required';
   if (!data.type || !['watering', 'fertilizing'].includes(data.type)) return 'Valid type (watering or fertilizing) is required';
   if (!data.time || !/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/.test(data.time)) return 'Valid time in HH:MM format is required';
   if (!Array.isArray(data.days) || data.days.length === 0) return 'At least one day of the week is required';
-  if (typeof data.duration !== 'number' || data.duration < 1 || data.duration > 60) return 'Duration must be between 1 and 60 minutes';
-  
-  return null; // No validation errors
+  if (typeof data.duration !== 'number' || data.duration <= 0) return 'Duration must be greater than 0';
+  return null;
 }
 
 // Create a new schedule
 app.post('/api/schedules', async (req, res) => {
   try {
+    console.log('Received schedule data:', req.body);
     const validationError = validateScheduleData(req.body);
     if (validationError) {
       return res.status(400).json({ 
@@ -1589,7 +1588,7 @@ app.post('/api/schedules', async (req, res) => {
     const insertedSchedule = {
       ...scheduleData,
       _id: result.insertedId,
-      id: result.insertedId.toString() // Add id field for client compatibility
+      id: result.insertedId.toString()
     };
 
     // Create audit log entry
@@ -1604,9 +1603,9 @@ app.post('/api/schedules', async (req, res) => {
       scheduleData: scheduleData
     });
 
+    console.log('Schedule created successfully:', insertedSchedule);
     res.status(201).json({ 
       success: true, 
-      id: result.insertedId.toString(),
       schedule: insertedSchedule
     });
   } catch (error) {

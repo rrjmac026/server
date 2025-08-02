@@ -307,6 +307,8 @@ bool syncTime() {
 
 // Replace the server communication function
 void sendDataToServer(int moisture, bool waterState, float temperature, float humidity, bool isHeartbeat = false) {
+    unsigned long currentMillis = millis();  // Add this line
+
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("❌ WiFi not connected");
         return;
@@ -674,11 +676,11 @@ bool lastFertilizerState = false;
 // Add new global variable for diagnostics logging
 unsigned long lastDiagnosticsLog = 0;
 
-// Add these with other global variables
-float lastSentTemp = 0;
-float lastSentHumidity = 0;
-int lastSentMoisture = 0;
-unsigned long lastHeartbeatTime = 0;
+// Remove or comment out these duplicate declarations:
+// float lastSentTemp = 0;
+// float lastSentHumidity = 0;
+// int lastSentMoisture = 0;
+// unsigned long lastHeartbeatTime = 0;
 
 // Define thresholds
 const float TEMP_THRESHOLD = 0.5;     // ±0.5°C
