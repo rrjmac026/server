@@ -17,20 +17,6 @@ async function connectToDatabase() {
     }
     
     db = client.db(process.env.MONGODB_DB_NAME || 'plantmonitoringdb');
-    
-    // Initialize collections if they don't exist
-    const collections = await db.listCollections().toArray();
-    const collectionNames = collections.map(c => c.name);
-
-    // Initialize required collections
-    const requiredCollections = ['sensor_data', 'audit_logs', 'schedules'];
-    for (const collName of requiredCollections) {
-        if (!collectionNames.includes(collName)) {
-            await db.createCollection(collName);
-            console.log(`Created collection: ${collName}`);
-        }
-    }
-
     return db;
 }
 
@@ -64,18 +50,44 @@ app.get("/api/health", (req, res) => {
 });
 
 // Helper functions
+async function saveSensorData(data) {
+    const collection = await getCollection('sensor_data');
+    const result = await collection.insertOne({
+        ...data,
+        waterState: Boolean(data.waterState),
+        fertilizerState: Boolean(data.fertilizerState),
+        timestamp: data.timestamp ? new Date(data.timestamp) : moment().tz('Asia/Manila').toDate(),
+        heartbeat: Boolean(data.heartbeat)
+    });
+
+    // Also log this as an audit event
+    const auditCollection = await getCollection('audit_logs');
+    await auditCollection.insertOne({
+        plantId: data.plantId,
+        type: 'sensor',
+        action: data.heartbeat ? 'heartbeat' : 'read',
+        status: 'success',
+        timestamp: moment().tz('Asia/Manila').toDate(),
+        details: data.heartbeat ? 'Heartbeat received' : 'Sensor reading recorded',
+        sensorData: {
+            moisture: data.moisture,
+            temperature: data.temperature,
+            humidity: data.humidity,
+            moistureStatus: data.moistureStatus,
+            waterState: Boolean(data.waterState),
+            fertilizerState: Boolean(data.fertilizerState),
+            isConnected: data.isConnected,
+            heartbeat: Boolean(data.heartbeat)
+        }
+    });
+
+    return result;
+}
+
 function isSensorDataStale(timestamp) {
-  if (!timestamp) return true;
-  
-  const now = moment().tz('Asia/Manila');
-  const readingTime = moment(timestamp).tz('Asia/Manila');
-  const differenceInSeconds = now.diff(readingTime, 'seconds');
-  
-  console.log(`Stale check for timestamp ${readingTime.format()}: ${differenceInSeconds} seconds ago`);
-  
-  // ESP32 sends heartbeat every 1 minute, so if no data for 3 minutes = offline
-  // This gives 2 missed heartbeats before marking as offline (reliable but responsive)
-  return differenceInSeconds > 90; // 3 minutes 
+  const now = moment();
+  const readingTime = moment(timestamp);
+  return now.diff(readingTime, 'seconds') > 90;  // Changed to 35 seconds (30s ESP32 interval + 5s buffer)
 }
 
 async function getLatestReading(plantId) {
@@ -85,91 +97,20 @@ async function getLatestReading(plantId) {
         { sort: { timestamp: -1 } }
     );
     
-    // If no reading exists at all, return offline status
-    if (!reading) {
-        console.log(`No readings found for plant ${plantId}`);
-        return {
-            moisture: 0,
-            temperature: 0,
-            humidity: 0,
-            moistureStatus: "OFFLINE",
-            waterState: false,
-            fertilizerState: false,
-            isOnline: false,
-            isConnected: false,
-            timestamp: null
-        };
-    }
+    if (!reading) return null;
     
-    // Check if data is stale (device hasn't sent data recently)
     const isStale = isSensorDataStale(reading.timestamp);
-    
-    // Device is considered online if:
-    // 1. Data is not stale (recent reading)
-    // 2. The reading indicates device was connected when it sent the data
-    const isDeviceOnline = !isStale && (reading.isConnected !== false);
-    
-    console.log(`Plant ${plantId} status check:`, {
-        lastReadingTime: reading.timestamp,
-        isStale,
-        readingIsConnected: reading.isConnected,
-        finalStatus: isDeviceOnline,
-        timeSinceLastReading: moment().diff(moment(reading.timestamp), 'seconds') + ' seconds'
-    });
+    const isConnected = !isStale && reading.isConnected === true;
     
     return {
         ...reading,
-        isConnected: isDeviceOnline,
-        isOnline: isDeviceOnline,
-        moisture: isDeviceOnline ? (reading.moisture || 0) : 0,
-        temperature: isDeviceOnline ? (reading.temperature || 0) : 0,
-        humidity: isDeviceOnline ? (reading.humidity || 0) : 0,
-        moistureStatus: !isDeviceOnline ? "OFFLINE" : (reading.moistureStatus || getMoistureStatus(reading.moisture)),
-        waterState: isDeviceOnline ? Boolean(reading.waterState) : false,
-        fertilizerState: isDeviceOnline ? Boolean(reading.fertilizerState) : false,
-        timestamp: reading.timestamp
+        isConnected,
+        isOnline: isConnected,
+        moisture: isConnected ? reading.moisture : 0,
+        temperature: isConnected ? reading.temperature : 0,
+        humidity: isConnected ? reading.humidity : 0,
+        moistureStatus: !isConnected ? "OFFLINE" : getMoistureStatus(reading.moisture)
     };
-}
-
-async function saveSensorData(data) {
-    const collection = await getCollection('sensor_data');
-    
-    // Always set isConnected to true when receiving data from ESP32
-    const sensorDocument = {
-        ...data,
-        waterState: Boolean(data.waterState),
-        fertilizerState: Boolean(data.fertilizerState),
-        timestamp: data.timestamp ? new Date(data.timestamp) : moment().tz('Asia/Manila').toDate(),
-        heartbeat: Boolean(data.heartbeat),
-        isConnected: true, // Always true when receiving data
-        receivedAt: moment().tz('Asia/Manila').toDate() // Track when server received the data
-    };
-
-    const result = await collection.insertOne(sensorDocument);
-
-    // Enhanced audit logging
-    const auditCollection = await getCollection('audit_logs');
-    await auditCollection.insertOne({
-        plantId: data.plantId,
-        type: 'sensor',
-        action: data.heartbeat ? 'heartbeat' : 'reading',
-        status: 'success',
-        timestamp: moment().tz('Asia/Manila').toDate(),
-        details: data.heartbeat ? 'Heartbeat received - device online' : 'Sensor reading recorded',
-        sensorData: {
-            moisture: data.moisture,
-            temperature: data.temperature,
-            humidity: data.humidity,
-            moistureStatus: data.moistureStatus,
-            waterState: Boolean(data.waterState),
-            fertilizerState: Boolean(data.fertilizerState),
-            isConnected: true,
-            heartbeat: Boolean(data.heartbeat),
-            dataAge: 0 // Fresh data
-        }
-    });
-
-    return result;
 }
 
 // Function to determine moisture status
@@ -259,10 +200,10 @@ app.post("/api/sensor-data", async (req, res) => {
 
     if (!data.plantId || data.moisture == null || data.temperature == null || 
         data.humidity == null || data.waterState == null || data.fertilizerState == null) {
-      console.log('❌ Incomplete sensor data received:', data);
       return res.status(400).json({ error: "Incomplete sensor data" });
     }
 
+    data.isConnected = true;
     data.moistureStatus = getMoistureStatus(data.moisture);
     data.waterState = Boolean(data.waterState);
     data.fertilizerState = Boolean(data.fertilizerState);
@@ -270,22 +211,14 @@ app.post("/api/sensor-data", async (req, res) => {
 
     const result = await saveSensorData(data);
     
-    const logMessage = data.heartbeat 
-      ? `💓 Heartbeat from plant ${data.plantId} - Device ONLINE` 
-      : `📡 Sensor data from plant ${data.plantId} - Device ONLINE`;
-    
-    console.log(logMessage, {
-      moisture: data.moisture,
-      temperature: data.temperature,
-      humidity: data.humidity,
-      timestamp: moment().tz('Asia/Manila').format()
-    });
+    // Log different messages based on heartbeat status
+    if (data.heartbeat) {
+      console.log(`💓 Heartbeat received from plant ${data.plantId}`);
+    } else {
+      console.log(`📡 New sensor reading from plant ${data.plantId}`);
+    }
 
-    res.status(201).json({ 
-      message: "Sensor data saved successfully", 
-      id: result.insertedId,
-      deviceStatus: "ONLINE"
-    });
+    res.status(201).json({ message: "Sensor data saved", id: result.insertedId });
   } catch (error) {
     console.error("❌ Error saving sensor data:", error.message);
     res.status(500).json({ error: "Failed to save sensor data" });
@@ -303,26 +236,33 @@ app.get("/api/sensor-data", async (req, res) => {
     }
 
     const latestReading = await getLatestReading(plantId);
-    
-    const response = {
-      moisture: latestReading.moisture,
-      temperature: latestReading.temperature,
-      humidity: latestReading.humidity,
-      moistureStatus: latestReading.moistureStatus,
-      waterState: latestReading.waterState,
-      fertilizerState: latestReading.fertilizerState,
-      timestamp: latestReading.timestamp ? moment(latestReading.timestamp).tz('Asia/Manila').format() : null,
-      isOnline: latestReading.isConnected,
-      isConnected: latestReading.isConnected,
-      lastSeenAgo: latestReading.timestamp ? moment().diff(moment(latestReading.timestamp), 'seconds') : null,
-      deviceStatus: latestReading.isConnected ? "ONLINE" : "OFFLINE"
-    };
 
-    console.log(`📊 Status check for plant ${plantId}:`, {
-      status: response.deviceStatus,
-      lastSeen: response.lastSeenAgo ? `${response.lastSeenAgo}s ago` : 'Never',
-      moistureStatus: response.moistureStatus
-    });
+    if (!latestReading) {
+      return res.status(404).json({
+        error: 'No sensor data found',
+        moisture: 0,
+        temperature: 0,
+        humidity: 0,
+        moistureStatus: "OFFLINE",
+        waterState: false,
+        fertilizerState: false,
+        isOnline: false,
+        isConnected: false,
+        timestamp: null
+      });
+    }
+
+    const response = {
+      moisture: latestReading.isConnected ? latestReading.moisture : 0,
+      temperature: latestReading.isConnected ? latestReading.temperature : 0,
+      humidity: latestReading.isConnected ? latestReading.humidity : 0,
+      moistureStatus: latestReading.moistureStatus,
+      waterState: latestReading.isConnected ? latestReading.waterState : false,
+      fertilizerState: latestReading.isConnected ? latestReading.fertilizerState : false,
+      timestamp: moment(latestReading.timestamp.toDate()).tz('Asia/Manila').format(),
+      isOnline: latestReading.isConnected,
+      isConnected: latestReading.isConnected
+    };
 
     res.json(response);
   } catch (error) {
@@ -330,6 +270,7 @@ app.get("/api/sensor-data", async (req, res) => {
     res.status(500).json({ error: "Failed to load sensor data" });
   }
 });
+
 
 // ==========================
 // ✅ Get Latest Sensor Data
@@ -437,965 +378,6 @@ app.get("/api/reports", async (req, res) => {
       
       doc.font('Helvetica')
          .fontSize(11) // Slightly larger font
-         .fillColor('#000000');
-      
-      // Details rows with better spacing
-      const detailsData = [
-        ['Plant ID:', plantId, 'Generated:', moment().tz('Asia/Manila').format('YYYY-MM-DD LT')],
-        ['Period:', `${moment(start).format('YYYY-MM-DD')} to ${moment(end).format('YYYY-MM-DD')}`, 'Total Records:', readings.length.toString()]
-      ];
-      
-      detailsData.forEach((row, i) => {
-        const rowY = currentY + (i * 30) + 15; // Better vertical spacing
-        doc.font('Helvetica-Bold').text(row[0], startX + 20, rowY);
-        doc.font('Helvetica').text(row[1], startX + 100, rowY); // Adjusted X position
-        doc.font('Helvetica-Bold').text(row[2], startX + 220, rowY);
-        doc.font('Helvetica').text(row[3], startX + 300, rowY); // Adjusted X position
-      });
-      
-      currentY += 100; // Increased spacing after details
-
-      // Readings table with better spacing
-      const tableWidth = doc.page.width - 100;
-      const tableX = 50;
-      
-      const headers = ['Date & Time', 'Temperature', 'Humidity', 'Moisture', 'Status', 'Watering', 'Fertilizer'];
-      currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
-      
-      readings.forEach((reading, index) => {
-        if (currentY > doc.page.height - 100) { // More space for footer
-          doc.addPage();
-          currentY = drawPageHeader(doc, Math.floor(index / 15) + 2); // Fewer rows per page
-          currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
-        }
-        
-        const rowData = [
-          moment(reading.timestamp).format('MM-DD HH:mm'), // Shorter date format
-          `${reading.temperature || 'N/A'}°C`,
-          `${reading.humidity || 'N/A'}%`,
-          `${reading.moisture || 'N/A'}%`,
-          reading.moistureStatus || 'N/A',
-          reading.wateringStatus || '-',
-          reading.fertilizerStatus || '-'
-        ];
-        
-        currentY = drawTableRow(doc, rowData, tableX, currentY, tableWidth);
-      });
-      
-      drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
-      
-      doc.end();
-    } else {
-      // JSON format - return all readings
-      const stats = calculateStats(readings);
-      res.json({ 
-        totalReadings: readings.length,
-        stats,
-        allReadings: readings
-      });
-    }
-
-  } catch (error) {
-    console.error("❌ Report generation error:", error);
-    
-    // Log failed report generation
-    try {
-      const auditCollection = await getCollection('audit_logs');
-      await auditCollection.insertOne({
-        plantId: req.query.plantId,
-        type: 'report',
-        action: 'generate',
-        status: 'failed',
-        timestamp: moment().tz('Asia/Manila').toDate(),
-        details: `Failed to generate report: ${error.message}`,
-      });
-    } catch (auditError) {
-      console.error("Failed to log report generation error:", auditError);
-    }
-
-    res.status(500).json({ 
-      error: "Failed to generate report", 
-      details: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
-  }
-});
-
-// ==========================
-// ✅ PDF Report Endpoint (with URL params) - FIXED VERSION
-// ==========================
-app.get("/api/reports/:plantId", async (req, res) => {
-  try {
-    const { plantId } = req.params;
-    const { start, end, format = 'pdf' } = req.query;
-    
-    if (!start || !end) {
-      return res.status(400).json({
-        error: "Missing parameters",
-        example: "/api/reports/PLANT123?start=2024-01-01&end=2024-01-31&format=pdf|json"
-      });
-    }
-
-    console.log('Debug - Report Request:', { plantId, start, end, format });
-
-    // Fetch all readings with debug logging
-    const readings = await getAllReadingsInRange(plantId, start, end);
-    console.log(`Debug - Total readings found: ${readings?.length || 0}`);
-
-    if (!readings || readings.length === 0) {
-      console.log('Debug - No readings found for criteria:', { plantId, start, end });
-      if (format === 'json') {
-        return res.json({ 
-          totalReadings: 0,
-          stats: calculateStats([]),
-          allReadings: []
-        });
-      }
-    }
-
-    if (format === 'pdf') {
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename=plant-report-${plantId}.pdf`);
-      
-      const doc = new PDFDocument({ margin: 50 });
-      doc.pipe(res);
-
-      let currentY = drawPageHeader(doc, 1, 'Plant Monitoring Report');
-      currentY += 30; // Increased spacing after header
-
-      // Report details in a centered table
-      const reportDetailsWidth = 400;
-      const startX = (doc.page.width - reportDetailsWidth) / 2;
-      
-      // Details table background
-      doc.rect(startX, currentY, reportDetailsWidth, 80) // Increased height
-         .fillColor('#f9f9f9')
-         .fill();
-      
-      doc.font('Helvetica')
-         .fontSize(10)
-         .fillColor('#000000');
-      
-      // Details rows with better spacing
-      const detailsData = [
-        ['Plant ID:', plantId, 'Generated:', moment().tz('Asia/Manila').format('YYYY-MM-DD LT')],
-        ['Period:', `${moment(start).format('YYYY-MM-DD')} to ${moment(end).format('YYYY-MM-DD')}`, 'Total Records:', readings.length.toString()]
-      ];
-      
-      detailsData.forEach((row, i) => {
-        const rowY = currentY + (i * 30) + 15; // Better vertical spacing
-        doc.font('Helvetica-Bold').text(row[0], startX + 20, rowY);
-        doc.font('Helvetica').text(row[1], startX + 100, rowY); // Adjusted X position
-        doc.font('Helvetica-Bold').text(row[2], startX + 220, rowY);
-        doc.font('Helvetica').text(row[3], startX + 300, rowY); // Adjusted X position
-      });
-      
-      currentY += 100; // Increased spacing after details
-
-      // Readings table with better spacing
-      const tableWidth = doc.page.width - 100;
-      const tableX = 50;
-      
-      const headers = ['Date & Time', 'Temperature', 'Humidity', 'Moisture', 'Status', 'Watering', 'Fertilizer'];
-      currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
-      
-      readings.forEach((reading, index) => {
-        if (currentY > doc.page.height - 100) { // More space for footer
-          doc.addPage();
-          currentY = drawPageHeader(doc, Math.floor(index / 15) + 2); // Fewer rows per page
-          currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
-        }
-        
-        const rowData = [
-          moment(reading.timestamp).format('MM-DD HH:mm'), // Shorter date format
-          `${reading.temperature || 'N/A'}°C`,
-          `${reading.humidity || 'N/A'}%`,
-          `${reading.moisture || 'N/A'}%`,
-          reading.moistureStatus || 'N/A',
-          reading.wateringStatus || '-',
-          reading.fertilizerStatus || '-'
-        ];
-        
-        currentY = drawTableRow(doc, rowData, tableX, currentY, tableWidth);
-      });
-      
-      drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
-      
-      doc.end();
-    } else {
-      // JSON format - return all readings
-      const stats = calculateStats(readings);
-      res.json({ 
-        totalReadings: readings.length,
-        stats,
-        allReadings: readings
-      });
-    }
-
-  } catch (error) {
-    console.error("❌ Report generation error:", error);
-    
-    // Log failed report generation
-    try {
-      const auditCollection = await getCollection('audit_logs');
-      await auditCollection.insertOne({
-        plantId: req.query.plantId,
-        type: 'report',
-        action: 'generate',
-        status: 'failed',
-        timestamp: moment().tz('Asia/Manila').toDate(),
-        details: `Failed to generate report: ${error.message}`,
-      });
-    } catch (auditError) {
-      console.error("Failed to log report generation error:", auditError);
-    }
-
-    res.status(500).json({ 
-      error: "Failed to generate report", 
-      details: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
-  }
-});
-
-// ==========================
-// ✅ PDF Report Endpoint (with URL params) - FIXED VERSION
-// ==========================
-app.get("/api/reports/:plantId", async (req, res) => {
-  try {
-    const { plantId } = req.params;
-    const { start, end, format = 'pdf' } = req.query;
-    
-    if (!start || !end) {
-      return res.status(400).json({
-        error: "Missing parameters",
-        example: "/api/reports/PLANT123?start=2024-01-01&end=2024-01-31&format=pdf|json"
-      });
-    }
-
-    console.log('Debug - Report Request:', { plantId, start, end, format });
-
-    // Fetch all readings with debug logging
-    const readings = await getAllReadingsInRange(plantId, start, end);
-    console.log(`Debug - Total readings found: ${readings?.length || 0}`);
-
-    if (!readings || readings.length === 0) {
-      console.log('Debug - No readings found for criteria:', { plantId, start, end });
-      if (format === 'json') {
-        return res.json({ 
-          totalReadings: 0,
-          stats: calculateStats([]),
-          allReadings: []
-        });
-      }
-    }
-
-    if (format === 'pdf') {
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename=plant-report-${plantId}.pdf`);
-      
-      const doc = new PDFDocument({ margin: 50 });
-      doc.pipe(res);
-
-      let currentY = drawPageHeader(doc, 1, 'Plant Monitoring Report');
-      currentY += 30; // Increased spacing after header
-
-      // Report details in a centered table
-      const reportDetailsWidth = 400;
-      const startX = (doc.page.width - reportDetailsWidth) / 2;
-      
-      // Details table background
-      doc.rect(startX, currentY, reportDetailsWidth, 80) // Increased height
-         .fillColor('#f9f9f9')
-         .fill();
-      
-      doc.font('Helvetica')
-         .fontSize(10)
-         .fillColor('#000000');
-      
-      // Details rows with better spacing
-      const detailsData = [
-        ['Plant ID:', plantId, 'Generated:', moment().tz('Asia/Manila').format('YYYY-MM-DD LT')],
-        ['Period:', `${moment(start).format('YYYY-MM-DD')} to ${moment(end).format('YYYY-MM-DD')}`, 'Total Records:', readings.length.toString()]
-      ];
-      
-      detailsData.forEach((row, i) => {
-        const rowY = currentY + (i * 30) + 15; // Better vertical spacing
-        doc.font('Helvetica-Bold').text(row[0], startX + 20, rowY);
-        doc.font('Helvetica').text(row[1], startX + 100, rowY); // Adjusted X position
-        doc.font('Helvetica-Bold').text(row[2], startX + 220, rowY);
-        doc.font('Helvetica').text(row[3], startX + 300, rowY); // Adjusted X position
-      });
-      
-      currentY += 100; // Increased spacing after details
-
-      // Readings table with better spacing
-      const tableWidth = doc.page.width - 100;
-      const tableX = 50;
-      
-      const headers = ['Date & Time', 'Temperature', 'Humidity', 'Moisture', 'Status', 'Watering', 'Fertilizer'];
-      currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
-      
-      readings.forEach((reading, index) => {
-        if (currentY > doc.page.height - 100) { // More space for footer
-          doc.addPage();
-          currentY = drawPageHeader(doc, Math.floor(index / 15) + 2); // Fewer rows per page
-          currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
-        }
-        
-        const rowData = [
-          moment(reading.timestamp).format('MM-DD HH:mm'), // Shorter date format
-          `${reading.temperature || 'N/A'}°C`,
-          `${reading.humidity || 'N/A'}%`,
-          `${reading.moisture || 'N/A'}%`,
-          reading.moistureStatus || 'N/A',
-          reading.wateringStatus || '-',
-          reading.fertilizerStatus || '-'
-        ];
-        
-        currentY = drawTableRow(doc, rowData, tableX, currentY, tableWidth);
-      });
-      
-      drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
-      
-      doc.end();
-    } else {
-      // JSON format - return all readings
-      const stats = calculateStats(readings);
-      res.json({ 
-        totalReadings: readings.length,
-        stats,
-        allReadings: readings
-      });
-    }
-
-  } catch (error) {
-    console.error("❌ Report generation error:", error);
-    
-    // Log failed report generation
-    try {
-      const auditCollection = await getCollection('audit_logs');
-      await auditCollection.insertOne({
-        plantId: req.query.plantId,
-        type: 'report',
-        action: 'generate',
-        status: 'failed',
-        timestamp: moment().tz('Asia/Manila').toDate(),
-        details: `Failed to generate report: ${error.message}`,
-      });
-    } catch (auditError) {
-      console.error("Failed to log report generation error:", auditError);
-    }
-
-    res.status(500).json({ 
-      error: "Failed to generate report", 
-      details: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
-  }
-});
-
-// ==========================
-// ✅ PDF Report Endpoint (with URL params) - FIXED VERSION
-// ==========================
-app.get("/api/reports/:plantId", async (req, res) => {
-  try {
-    const { plantId } = req.params;
-    const { start, end, format = 'pdf' } = req.query;
-    
-    if (!start || !end) {
-      return res.status(400).json({
-        error: "Missing parameters",
-        example: "/api/reports/PLANT123?start=2024-01-01&end=2024-01-31&format=pdf|json"
-      });
-    }
-
-    console.log('Debug - Report Request:', { plantId, start, end, format });
-
-    // Fetch all readings with debug logging
-    const readings = await getAllReadingsInRange(plantId, start, end);
-    console.log(`Debug - Total readings found: ${readings?.length || 0}`);
-
-    if (!readings || readings.length === 0) {
-      console.log('Debug - No readings found for criteria:', { plantId, start, end });
-      if (format === 'json') {
-        return res.json({ 
-          totalReadings: 0,
-          stats: calculateStats([]),
-          allReadings: []
-        });
-      }
-    }
-
-    if (format === 'pdf') {
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename=plant-report-${plantId}.pdf`);
-      
-      const doc = new PDFDocument({ margin: 50 });
-      doc.pipe(res);
-
-      let currentY = drawPageHeader(doc, 1, 'Plant Monitoring Report');
-      currentY += 30; // Increased spacing after header
-
-      // Report details in a centered table
-      const reportDetailsWidth = 400;
-      const startX = (doc.page.width - reportDetailsWidth) / 2;
-      
-      // Details table background
-      doc.rect(startX, currentY, reportDetailsWidth, 80) // Increased height
-         .fillColor('#f9f9f9')
-         .fill();
-      
-      doc.font('Helvetica')
-         .fontSize(10)
-         .fillColor('#000000');
-      
-      // Details rows with better spacing
-      const detailsData = [
-        ['Plant ID:', plantId, 'Generated:', moment().tz('Asia/Manila').format('YYYY-MM-DD LT')],
-        ['Period:', `${moment(start).format('YYYY-MM-DD')} to ${moment(end).format('YYYY-MM-DD')}`, 'Total Records:', readings.length.toString()]
-      ];
-      
-      detailsData.forEach((row, i) => {
-        const rowY = currentY + (i * 30) + 15; // Better vertical spacing
-        doc.font('Helvetica-Bold').text(row[0], startX + 20, rowY);
-        doc.font('Helvetica').text(row[1], startX + 100, rowY); // Adjusted X position
-        doc.font('Helvetica-Bold').text(row[2], startX + 220, rowY);
-        doc.font('Helvetica').text(row[3], startX + 300, rowY); // Adjusted X position
-      });
-      
-      currentY += 100; // Increased spacing after details
-
-      // Readings table with better spacing
-      const tableWidth = doc.page.width - 100;
-      const tableX = 50;
-      
-      const headers = ['Date & Time', 'Temperature', 'Humidity', 'Moisture', 'Status', 'Watering', 'Fertilizer'];
-      currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
-      
-      readings.forEach((reading, index) => {
-        if (currentY > doc.page.height - 100) { // More space for footer
-          doc.addPage();
-          currentY = drawPageHeader(doc, Math.floor(index / 15) + 2); // Fewer rows per page
-          currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
-        }
-        
-        const rowData = [
-          moment(reading.timestamp).format('MM-DD HH:mm'), // Shorter date format
-          `${reading.temperature || 'N/A'}°C`,
-          `${reading.humidity || 'N/A'}%`,
-          `${reading.moisture || 'N/A'}%`,
-          reading.moistureStatus || 'N/A',
-          reading.wateringStatus || '-',
-          reading.fertilizerStatus || '-'
-        ];
-        
-        currentY = drawTableRow(doc, rowData, tableX, currentY, tableWidth);
-      });
-      
-      drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
-      
-      doc.end();
-    } else {
-      // JSON format - return all readings
-      const stats = calculateStats(readings);
-      res.json({ 
-        totalReadings: readings.length,
-        stats,
-        allReadings: readings
-      });
-    }
-
-  } catch (error) {
-    console.error("❌ Report generation error:", error);
-    
-    // Log failed report generation
-    try {
-      const auditCollection = await getCollection('audit_logs');
-      await auditCollection.insertOne({
-        plantId: req.query.plantId,
-        type: 'report',
-        action: 'generate',
-        status: 'failed',
-        timestamp: moment().tz('Asia/Manila').toDate(),
-        details: `Failed to generate report: ${error.message}`,
-      });
-    } catch (auditError) {
-      console.error("Failed to log report generation error:", auditError);
-    }
-
-    res.status(500).json({ 
-      error: "Failed to generate report", 
-      details: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
-  }
-});
-
-// ==========================
-// ✅ PDF Report Endpoint (with URL params) - FIXED VERSION
-// ==========================
-app.get("/api/reports/:plantId", async (req, res) => {
-  try {
-    const { plantId } = req.params;
-    const { start, end, format = 'pdf' } = req.query;
-    
-    if (!start || !end) {
-      return res.status(400).json({
-        error: "Missing parameters",
-        example: "/api/reports/PLANT123?start=2024-01-01&end=2024-01-31&format=pdf|json"
-      });
-    }
-
-    console.log('Debug - Report Request:', { plantId, start, end, format });
-
-    // Fetch all readings with debug logging
-    const readings = await getAllReadingsInRange(plantId, start, end);
-    console.log(`Debug - Total readings found: ${readings?.length || 0}`);
-
-    if (!readings || readings.length === 0) {
-      console.log('Debug - No readings found for criteria:', { plantId, start, end });
-      if (format === 'json') {
-        return res.json({ 
-          totalReadings: 0,
-          stats: calculateStats([]),
-          allReadings: []
-        });
-      }
-    }
-
-    if (format === 'pdf') {
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename=plant-report-${plantId}.pdf`);
-      
-      const doc = new PDFDocument({ margin: 50 });
-      doc.pipe(res);
-
-      let currentY = drawPageHeader(doc, 1, 'Plant Monitoring Report');
-      currentY += 30; // Increased spacing after header
-
-      // Report details in a centered table
-      const reportDetailsWidth = 400;
-      const startX = (doc.page.width - reportDetailsWidth) / 2;
-      
-      // Details table background
-      doc.rect(startX, currentY, reportDetailsWidth, 80) // Increased height
-         .fillColor('#f9f9f9')
-         .fill();
-      
-      doc.font('Helvetica')
-         .fontSize(10)
-         .fillColor('#000000');
-      
-      // Details rows with better spacing
-      const detailsData = [
-        ['Plant ID:', plantId, 'Generated:', moment().tz('Asia/Manila').format('YYYY-MM-DD LT')],
-        ['Period:', `${moment(start).format('YYYY-MM-DD')} to ${moment(end).format('YYYY-MM-DD')}`, 'Total Records:', readings.length.toString()]
-      ];
-      
-      detailsData.forEach((row, i) => {
-        const rowY = currentY + (i * 30) + 15; // Better vertical spacing
-        doc.font('Helvetica-Bold').text(row[0], startX + 20, rowY);
-        doc.font('Helvetica').text(row[1], startX + 100, rowY); // Adjusted X position
-        doc.font('Helvetica-Bold').text(row[2], startX + 220, rowY);
-        doc.font('Helvetica').text(row[3], startX + 300, rowY); // Adjusted X position
-      });
-      
-      currentY += 100; // Increased spacing after details
-
-      // Readings table with better spacing
-      const tableWidth = doc.page.width - 100;
-      const tableX = 50;
-      
-      const headers = ['Date & Time', 'Temperature', 'Humidity', 'Moisture', 'Status', 'Watering', 'Fertilizer'];
-      currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
-      
-      readings.forEach((reading, index) => {
-        if (currentY > doc.page.height - 100) { // More space for footer
-          doc.addPage();
-          currentY = drawPageHeader(doc, Math.floor(index / 15) + 2); // Fewer rows per page
-          currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
-        }
-        
-        const rowData = [
-          moment(reading.timestamp).format('MM-DD HH:mm'), // Shorter date format
-          `${reading.temperature || 'N/A'}°C`,
-          `${reading.humidity || 'N/A'}%`,
-          `${reading.moisture || 'N/A'}%`,
-          reading.moistureStatus || 'N/A',
-          reading.wateringStatus || '-',
-          reading.fertilizerStatus || '-'
-        ];
-        
-        currentY = drawTableRow(doc, rowData, tableX, currentY, tableWidth);
-      });
-      
-      drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
-      
-      doc.end();
-    } else {
-      // JSON format - return all readings
-      const stats = calculateStats(readings);
-      res.json({ 
-        totalReadings: readings.length,
-        stats,
-        allReadings: readings
-      });
-    }
-
-  } catch (error) {
-    console.error("❌ Report generation error:", error);
-    
-    // Log failed report generation
-    try {
-      const auditCollection = await getCollection('audit_logs');
-      await auditCollection.insertOne({
-        plantId: req.query.plantId,
-        type: 'report',
-        action: 'generate',
-        status: 'failed',
-        timestamp: moment().tz('Asia/Manila').toDate(),
-        details: `Failed to generate report: ${error.message}`,
-      });
-    } catch (auditError) {
-      console.error("Failed to log report generation error:", auditError);
-    }
-
-    res.status(500).json({ 
-      error: "Failed to generate report", 
-      details: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
-  }
-});
-
-// ==========================
-// ✅ PDF Report Endpoint (with URL params) - FIXED VERSION
-// ==========================
-app.get("/api/reports/:plantId", async (req, res) => {
-  try {
-    const { plantId } = req.params;
-    const { start, end, format = 'pdf' } = req.query;
-    
-    if (!start || !end) {
-      return res.status(400).json({
-        error: "Missing parameters",
-        example: "/api/reports/PLANT123?start=2024-01-01&end=2024-01-31&format=pdf|json"
-      });
-    }
-
-    console.log('Debug - Report Request:', { plantId, start, end, format });
-
-    // Fetch all readings with debug logging
-    const readings = await getAllReadingsInRange(plantId, start, end);
-    console.log(`Debug - Total readings found: ${readings?.length || 0}`);
-
-    if (!readings || readings.length === 0) {
-      console.log('Debug - No readings found for criteria:', { plantId, start, end });
-      if (format === 'json') {
-        return res.json({ 
-          totalReadings: 0,
-          stats: calculateStats([]),
-          allReadings: []
-        });
-      }
-    }
-
-    if (format === 'pdf') {
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename=plant-report-${plantId}.pdf`);
-      
-      const doc = new PDFDocument({ margin: 50 });
-      doc.pipe(res);
-
-      let currentY = drawPageHeader(doc, 1, 'Plant Monitoring Report');
-      currentY += 30; // Increased spacing after header
-
-      // Report details in a centered table
-      const reportDetailsWidth = 400;
-      const startX = (doc.page.width - reportDetailsWidth) / 2;
-      
-      // Details table background
-      doc.rect(startX, currentY, reportDetailsWidth, 80) // Increased height
-         .fillColor('#f9f9f9')
-         .fill();
-      
-      doc.font('Helvetica')
-         .fontSize(10)
-         .fillColor('#000000');
-      
-      // Details rows with better spacing
-      const detailsData = [
-        ['Plant ID:', plantId, 'Generated:', moment().tz('Asia/Manila').format('YYYY-MM-DD LT')],
-        ['Period:', `${moment(start).format('YYYY-MM-DD')} to ${moment(end).format('YYYY-MM-DD')}`, 'Total Records:', readings.length.toString()]
-      ];
-      
-      detailsData.forEach((row, i) => {
-        const rowY = currentY + (i * 30) + 15; // Better vertical spacing
-        doc.font('Helvetica-Bold').text(row[0], startX + 20, rowY);
-        doc.font('Helvetica').text(row[1], startX + 100, rowY); // Adjusted X position
-        doc.font('Helvetica-Bold').text(row[2], startX + 220, rowY);
-        doc.font('Helvetica').text(row[3], startX + 300, rowY); // Adjusted X position
-      });
-      
-      currentY += 100; // Increased spacing after details
-
-      // Readings table with better spacing
-      const tableWidth = doc.page.width - 100;
-      const tableX = 50;
-      
-      const headers = ['Date & Time', 'Temperature', 'Humidity', 'Moisture', 'Status', 'Watering', 'Fertilizer'];
-      currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
-      
-      readings.forEach((reading, index) => {
-        if (currentY > doc.page.height - 100) { // More space for footer
-          doc.addPage();
-          currentY = drawPageHeader(doc, Math.floor(index / 15) + 2); // Fewer rows per page
-          currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
-        }
-        
-        const rowData = [
-          moment(reading.timestamp).format('MM-DD HH:mm'), // Shorter date format
-          `${reading.temperature || 'N/A'}°C`,
-          `${reading.humidity || 'N/A'}%`,
-          `${reading.moisture || 'N/A'}%`,
-          reading.moistureStatus || 'N/A',
-          reading.wateringStatus || '-',
-          reading.fertilizerStatus || '-'
-        ];
-        
-        currentY = drawTableRow(doc, rowData, tableX, currentY, tableWidth);
-      });
-      
-      drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
-      
-      doc.end();
-    } else {
-      // JSON format - return all readings
-      const stats = calculateStats(readings);
-      res.json({ 
-        totalReadings: readings.length,
-        stats,
-        allReadings: readings
-      });
-    }
-
-  } catch (error) {
-    console.error("❌ Report generation error:", error);
-    
-    // Log failed report generation
-    try {
-      const auditCollection = await getCollection('audit_logs');
-      await auditCollection.insertOne({
-        plantId: req.query.plantId,
-        type: 'report',
-        action: 'generate',
-        status: 'failed',
-        timestamp: moment().tz('Asia/Manila').toDate(),
-        details: `Failed to generate report: ${error.message}`,
-      });
-    } catch (auditError) {
-      console.error("Failed to log report generation error:", auditError);
-    }
-
-    res.status(500).json({ 
-      error: "Failed to generate report", 
-      details: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
-  }
-});
-
-// ==========================
-// ✅ PDF Report Endpoint (with URL params) - FIXED VERSION
-// ==========================
-app.get("/api/reports/:plantId", async (req, res) => {
-  try {
-    const { plantId } = req.params;
-    const { start, end, format = 'pdf' } = req.query;
-    
-    if (!start || !end) {
-      return res.status(400).json({
-        error: "Missing parameters",
-        example: "/api/reports/PLANT123?start=2024-01-01&end=2024-01-31&format=pdf|json"
-      });
-    }
-
-    console.log('Debug - Report Request:', { plantId, start, end, format });
-
-    // Fetch all readings with debug logging
-    const readings = await getAllReadingsInRange(plantId, start, end);
-    console.log(`Debug - Total readings found: ${readings?.length || 0}`);
-
-    if (!readings || readings.length === 0) {
-      console.log('Debug - No readings found for criteria:', { plantId, start, end });
-      if (format === 'json') {
-        return res.json({ 
-          totalReadings: 0,
-          stats: calculateStats([]),
-          allReadings: []
-        });
-      }
-    }
-
-    if (format === 'pdf') {
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename=plant-report-${plantId}.pdf`);
-      
-      const doc = new PDFDocument({ margin: 50 });
-      doc.pipe(res);
-
-      let currentY = drawPageHeader(doc, 1, 'Plant Monitoring Report');
-      currentY += 30; // Increased spacing after header
-
-      // Report details in a centered table
-      const reportDetailsWidth = 400;
-      const startX = (doc.page.width - reportDetailsWidth) / 2;
-      
-      // Details table background
-      doc.rect(startX, currentY, reportDetailsWidth, 80) // Increased height
-         .fillColor('#f9f9f9')
-         .fill();
-      
-      doc.font('Helvetica')
-         .fontSize(10)
-         .fillColor('#000000');
-      
-      // Details rows with better spacing
-      const detailsData = [
-        ['Plant ID:', plantId, 'Generated:', moment().tz('Asia/Manila').format('YYYY-MM-DD LT')],
-        ['Period:', `${moment(start).format('YYYY-MM-DD')} to ${moment(end).format('YYYY-MM-DD')}`, 'Total Records:', readings.length.toString()]
-      ];
-      
-      detailsData.forEach((row, i) => {
-        const rowY = currentY + (i * 30) + 15; // Better vertical spacing
-        doc.font('Helvetica-Bold').text(row[0], startX + 20, rowY);
-        doc.font('Helvetica').text(row[1], startX + 100, rowY); // Adjusted X position
-        doc.font('Helvetica-Bold').text(row[2], startX + 220, rowY);
-        doc.font('Helvetica').text(row[3], startX + 300, rowY); // Adjusted X position
-      });
-      
-      currentY += 100; // Increased spacing after details
-
-      // Readings table with better spacing
-      const tableWidth = doc.page.width - 100;
-      const tableX = 50;
-      
-      const headers = ['Date & Time', 'Temperature', 'Humidity', 'Moisture', 'Status', 'Watering', 'Fertilizer'];
-      currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
-      
-      readings.forEach((reading, index) => {
-        if (currentY > doc.page.height - 100) { // More space for footer
-          doc.addPage();
-          currentY = drawPageHeader(doc, Math.floor(index / 15) + 2); // Fewer rows per page
-          currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
-        }
-        
-        const rowData = [
-          moment(reading.timestamp).format('MM-DD HH:mm'), // Shorter date format
-          `${reading.temperature || 'N/A'}°C`,
-          `${reading.humidity || 'N/A'}%`,
-          `${reading.moisture || 'N/A'}%`,
-          reading.moistureStatus || 'N/A',
-          reading.wateringStatus || '-',
-          reading.fertilizerStatus || '-'
-        ];
-        
-        currentY = drawTableRow(doc, rowData, tableX, currentY, tableWidth);
-      });
-      
-      drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
-      
-      doc.end();
-    } else {
-      // JSON format - return all readings
-      const stats = calculateStats(readings);
-      res.json({ 
-        totalReadings: readings.length,
-        stats,
-        allReadings: readings
-      });
-    }
-
-  } catch (error) {
-    console.error("❌ Report generation error:", error);
-    
-    // Log failed report generation
-    try {
-      const auditCollection = await getCollection('audit_logs');
-      await auditCollection.insertOne({
-        plantId: req.query.plantId,
-        type: 'report',
-        action: 'generate',
-        status: 'failed',
-        timestamp: moment().tz('Asia/Manila').toDate(),
-        details: `Failed to generate report: ${error.message}`,
-      });
-    } catch (auditError) {
-      console.error("Failed to log report generation error:", auditError);
-    }
-
-    res.status(500).json({ 
-      error: "Failed to generate report", 
-      details: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
-  }
-});
-
-// ==========================
-// ✅ PDF Report Endpoint (with URL params) - FIXED VERSION
-// ==========================
-app.get("/api/reports/:plantId", async (req, res) => {
-  try {
-    const { plantId } = req.params;
-    const { start, end, format = 'pdf' } = req.query;
-    
-    if (!start || !end) {
-      return res.status(400).json({
-        error: "Missing parameters",
-        example: "/api/reports/PLANT123?start=2024-01-01&end=2024-01-31&format=pdf|json"
-      });
-    }
-
-    console.log('Debug - Report Request:', { plantId, start, end, format });
-
-    // Fetch all readings with debug logging
-    const readings = await getAllReadingsInRange(plantId, start, end);
-    console.log(`Debug - Total readings found: ${readings?.length || 0}`);
-
-    if (!readings || readings.length === 0) {
-      console.log('Debug - No readings found for criteria:', { plantId, start, end });
-      if (format === 'json') {
-        return res.json({ 
-          totalReadings: 0,
-          stats: calculateStats([]),
-          allReadings: []
-        });
-      }
-    }
-
-    if (format === 'pdf') {
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename=plant-report-${plantId}.pdf`);
-      
-      const doc = new PDFDocument({ margin: 50 });
-      doc.pipe(res);
-
-      let currentY = drawPageHeader(doc, 1, 'Plant Monitoring Report');
-      currentY += 30; // Increased spacing after header
-
-      // Report details in a centered table
-      const reportDetailsWidth = 400;
-      const startX = (doc.page.width - reportDetailsWidth) / 2;
-      
-      // Details table background
-      doc.rect(startX, currentY, reportDetailsWidth, 80) // Increased height
-         .fillColor('#f9f9f9')
-         .fill();
-      
-      doc.font('Helvetica')
-         .fontSize(10)
          .fillColor('#000000');
       
       // Details rows with better spacing
@@ -2573,19 +1555,20 @@ function sanitizeAuditLog(log) {
 
 // Helper function to validate schedule data
 function validateScheduleData(data) {
+  // If any of these fields are missing or null, return specific error
   if (!data) return 'Schedule data is required';
   if (!data.plantId) return 'Plant ID is required';
   if (!data.type || !['watering', 'fertilizing'].includes(data.type)) return 'Valid type (watering or fertilizing) is required';
   if (!data.time || !/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/.test(data.time)) return 'Valid time in HH:MM format is required';
   if (!Array.isArray(data.days) || data.days.length === 0) return 'At least one day of the week is required';
-  if (typeof data.duration !== 'number' || data.duration <= 0) return 'Duration must be greater than 0';
-  return null;
+  if (typeof data.duration !== 'number' || data.duration < 1 || data.duration > 60) return 'Duration must be between 1 and 60 minutes';
+  
+  return null; // No validation errors
 }
 
 // Create a new schedule
 app.post('/api/schedules', async (req, res) => {
   try {
-    console.log('Received schedule data:', req.body);
     const validationError = validateScheduleData(req.body);
     if (validationError) {
       return res.status(400).json({ 
@@ -2606,7 +1589,7 @@ app.post('/api/schedules', async (req, res) => {
     const insertedSchedule = {
       ...scheduleData,
       _id: result.insertedId,
-      id: result.insertedId.toString() // Add this line to ensure ID is returned
+      id: result.insertedId.toString() // Add id field for client compatibility
     };
 
     // Create audit log entry
@@ -2621,9 +1604,9 @@ app.post('/api/schedules', async (req, res) => {
       scheduleData: scheduleData
     });
 
-    console.log('Schedule created successfully:', insertedSchedule);
     res.status(201).json({ 
       success: true, 
+      id: result.insertedId.toString(),
       schedule: insertedSchedule
     });
   } catch (error) {
