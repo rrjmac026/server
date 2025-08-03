@@ -1,5 +1,6 @@
 const PDFDocument = require('pdfkit');
 const moment = require('moment-timezone');
+const DatabaseConfig = require('../config/database');
 const SensorService = require('./sensorService');
 const AuditService = require('./auditService');
 const SensorUtils = require('../utils/sensorUtils');
@@ -12,6 +13,9 @@ class ReportService {
      */
     static async generateSensorReport(plantId, startDate, endDate, format = 'pdf') {
         try {
+            // Ensure database connection
+            await DatabaseConfig.connectToDatabase();
+            
             console.log('Debug - Report Request:', { plantId, startDate, endDate, format });
 
             // Fetch sensor readings
@@ -44,7 +48,7 @@ class ReportService {
             // Log failed report generation
             await AuditService.logReportGeneration(plantId, format, startDate, endDate, 'failed', error.message);
             
-            throw error;
+            throw new Error(`Failed to generate report: ${error.message}`);
         }
     }
 
