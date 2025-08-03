@@ -75,7 +75,7 @@ function isSensorDataStale(timestamp) {
   
   // ESP32 sends heartbeat every 1 minute, so if no data for 3 minutes = offline
   // This gives 2 missed heartbeats before marking as offline (reliable but responsive)
-  return differenceInSeconds > 70; // 3 minutes 
+  return differenceInSeconds > 90; // 3 minutes 
 }
 
 async function getLatestReading(plantId) {
