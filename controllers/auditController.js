@@ -1,7 +1,6 @@
 const AuditService = require('../services/auditService');
-const PDFDocument = require('pdfkit');
-const fs = require('fs');
-const path = require('path');
+const AuditUtils = require('../utils/auditUtils');
+const moment = require('moment-timezone');
 
 class AuditController {
     /**
@@ -9,14 +8,28 @@ class AuditController {
      */
     static async createAuditLog(req, res) {
         try {
-            const result = await AuditService.createAuditLog(req.body);
+            const data = req.body;
+            const validationError = AuditUtils.validateAuditLog(data);
             
-            res.status(201).json(result);
+            if (validationError) {
+                return res.status(400).json({ 
+                    success: false, 
+                    error: validationError 
+                });
+            }
+
+            const result = await AuditService.createAuditLog(data);
+            
+            res.status(201).json({ 
+                success: true,
+                id: result.insertedId,
+                data: result.logData 
+            });
         } catch (error) {
-            console.error("❌ Error creating audit log:", error.message);
-            res.status(400).json({ 
+            console.error("Error creating audit log:", error);
+            res.status(500).json({ 
                 success: false, 
-                error: error.message
+                error: "Failed to create audit log" 
             });
         }
     }
@@ -26,15 +39,42 @@ class AuditController {
      */
     static async getAuditLogs(req, res) {
         try {
-            const result = await AuditService.getAuditLogs(req.query);
-            res.json(result);
+            const { 
+                start, 
+                end, 
+                type, 
+                action, 
+                status,
+                plantId,
+                page = 1, 
+                limit = 20,
+                sort = 'desc' 
+            } = req.query;
+            
+            console.log('Fetching audit logs with params:', {
+                start, end, type, action, status, plantId, page, limit, sort
+            });
+            
+            const result = await AuditService.getAuditLogs({
+                start, end, type, action, status, plantId, page, limit, sort
+            });
+
+            console.log(`Found ${result.logs.length} logs out of ${result.pagination.total} total`);
+            
+            res.json({
+                success: true,
+                logs: result.logs.map(log => ({
+                    ...log,
+                    timestamp: log.timestamp
+                })),
+                pagination: result.pagination
+            });
         } catch (error) {
-            console.error("❌ Error fetching audit logs:", error.message);
+            console.error("Error fetching audit logs:", error);
             res.status(500).json({ 
                 success: false, 
                 error: "Failed to fetch audit logs",
-                logs: [],
-                pagination: { total: 0, page: 1, pages: 0, limit: 20 }
+                logs: [] 
             });
         }
     }
@@ -44,155 +84,51 @@ class AuditController {
      */
     static async exportAuditLogs(req, res) {
         try {
-            const result = await AuditService.exportAuditLogs(req.query);
-            
-            // Create PDF document
-            const doc = new PDFDocument({
-                margin: 50,
-                size: 'A4'
-            });
+            const { start, end, type, plantId, format = 'pdf' } = req.query;
 
-            // Set response headers for PDF download
-            const fileName = `audit-logs-${new Date().toISOString().split('T')[0]}.pdf`;
-            res.setHeader('Content-Type', 'application/pdf');
-            res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+            if (format.toLowerCase() === 'pdf') {
+                res.setHeader('Content-Type', 'application/pdf');
+                res.setHeader('Content-Disposition', 
+                    `attachment; filename=audit_logs_${moment().format('YYYY-MM-DD')}.pdf`);
+                res.setHeader('Cache-Control', 'no-cache');
+                res.setHeader('Pragma', 'no-cache');
+            }
 
-            // Pipe PDF to response
-            doc.pipe(res);
+            const logs = await AuditService.getLogsForExport({ start, end, type, plantId });
 
-            // Add PDF content
-            doc.fontSize(20).text('Audit Logs Report', { align: 'center' });
-            doc.moveDown();
-
-            // Add export info
-            doc.fontSize(12)
-               .text(`Export Date: ${new Date().toLocaleString()}`, { align: 'right' })
-               .text(`Total Records: ${result.logs.length}`, { align: 'right' });
-            
-            doc.moveDown(2);
-
-            // Add table headers
-            const startY = doc.y;
-            const colWidths = [80, 100, 80, 80, 150, 80];
-            const headers = ['Date', 'User', 'Action', 'Type', 'Description', 'Plant ID'];
-            
-            let currentX = 50;
-            headers.forEach((header, index) => {
-                doc.fontSize(10)
-                   .font('Helvetica-Bold')
-                   .text(header, currentX, startY, { 
-                       width: colWidths[index], 
-                       align: 'left' 
-                   });
-                currentX += colWidths[index];
-            });
-
-            // Add horizontal line under headers
-            doc.moveTo(50, startY + 15)
-               .lineTo(550, startY + 15)
-               .stroke();
-
-            // Add data rows
-            let rowY = startY + 25;
-            const rowHeight = 20;
-            
-            result.logs.forEach((log, rowIndex) => {
-                // Check if we need a new page
-                if (rowY > 750) {
-                    doc.addPage();
-                    rowY = 50;
-                }
-
-                currentX = 50;
-                const rowData = [
-                    new Date(log.createdAt).toLocaleDateString(),
-                    log.userId || 'System',
-                    log.action || '',
-                    log.type || '',
-                    (log.description || '').substring(0, 50) + (log.description && log.description.length > 50 ? '...' : ''),
-                    log.plantId || ''
-                ];
-
-                rowData.forEach((data, colIndex) => {
-                    doc.fontSize(9)
-                       .font('Helvetica')
-                       .text(data.toString(), currentX, rowY, { 
-                           width: colWidths[colIndex], 
-                           align: 'left',
-                           height: rowHeight
-                       });
-                    currentX += colWidths[colIndex];
+            if (format.toLowerCase() === 'pdf') {
+                const PDFDocument = require('pdfkit');
+                const doc = new PDFDocument({ 
+                    margin: 40,
+                    size: 'A4'
                 });
+                doc.pipe(res);
 
-                // Add light horizontal line between rows
-                if (rowIndex % 2 === 0) {
-                    doc.rect(50, rowY - 2, 500, rowHeight)
-                       .fill('#f9f9f9')
-                       .stroke('#f0f0f0');
-                }
+                let currentY = AuditUtils.drawEnhancedAuditHeader(doc, 1);
+                currentY = AuditUtils.drawAuditSummarySection(doc, currentY, logs, plantId, start, end, type);
+                currentY = AuditUtils.drawAuditLogsTable(doc, currentY, logs);
+                
+                AuditUtils.drawEnhancedFooter(doc);
+                doc.end();
+                return;
+            }
 
-                rowY += rowHeight;
+            // JSON format as fallback
+            res.json({
+                success: true,
+                logs: logs.map(log => ({
+                    ...log,
+                    timestamp: moment(log.timestamp).tz('Asia/Manila').format()
+                }))
             });
-
-            // Add footer
-            doc.fontSize(8)
-               .text(`Generated on ${new Date().toLocaleString()}`, 50, doc.page.height - 50, {
-                   align: 'center'
-               });
-
-            // Finalize PDF
-            doc.end();
-
         } catch (error) {
-            console.error("❌ Error exporting audit logs:", error.message);
-            
-            // If headers haven't been sent yet, send JSON error
+            console.error("Error exporting audit logs:", error);
             if (!res.headersSent) {
                 res.status(500).json({ 
                     success: false, 
-                    error: "Failed to export audit logs as PDF"
+                    error: "Failed to export audit logs" 
                 });
             }
-        }
-    }
-
-    /**
-     * Alternative: Export audit logs as CSV
-     */
-    static async exportAuditLogsCSV(req, res) {
-        try {
-            const result = await AuditService.exportAuditLogs(req.query);
-            
-            // Create CSV content
-            const headers = ['Date', 'User ID', 'Action', 'Type', 'Description', 'Plant ID', 'IP Address'];
-            let csvContent = headers.join(',') + '\n';
-            
-            result.logs.forEach(log => {
-                const row = [
-                    new Date(log.createdAt).toISOString(),
-                    log.userId || '',
-                    log.action || '',
-                    log.type || '',
-                    `"${(log.description || '').replace(/"/g, '""')}"`, // Escape quotes
-                    log.plantId || '',
-                    log.ipAddress || ''
-                ];
-                csvContent += row.join(',') + '\n';
-            });
-
-            // Set response headers for CSV download
-            const fileName = `audit-logs-${new Date().toISOString().split('T')[0]}.csv`;
-            res.setHeader('Content-Type', 'text/csv');
-            res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-            
-            res.send(csvContent);
-
-        } catch (error) {
-            console.error("❌ Error exporting audit logs as CSV:", error.message);
-            res.status(500).json({ 
-                success: false, 
-                error: "Failed to export audit logs as CSV"
-            });
         }
     }
 
@@ -201,10 +137,13 @@ class AuditController {
      */
     static async getAuditTypes(req, res) {
         try {
-            const result = await AuditService.getAuditTypes();
-            res.json(result);
+            const types = await AuditService.getAuditTypes();
+            
+            res.json({
+                success: true,
+                types: types.filter(t => t).map(t => String(t).toLowerCase())
+            });
         } catch (error) {
-            console.error("❌ Error fetching audit types:", error.message);
             res.status(500).json({ 
                 success: false, 
                 error: "Failed to fetch log types",
@@ -218,10 +157,13 @@ class AuditController {
      */
     static async getAuditActions(req, res) {
         try {
-            const result = await AuditService.getAuditActions();
-            res.json(result);
+            const actions = await AuditService.getAuditActions();
+            
+            res.json({
+                success: true,
+                actions: actions.filter(a => a).map(a => String(a).toLowerCase())
+            });
         } catch (error) {
-            console.error("❌ Error fetching audit actions:", error.message);
             res.status(500).json({ 
                 success: false, 
                 error: "Failed to fetch actions",
