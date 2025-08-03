@@ -98,9 +98,7 @@ class ReportService {
      */
     static async generateSensorReport(plantId, startDate, endDate, format = 'pdf') {
         try {
-            // Ensure database connection
-            await DatabaseConfig.connectToDatabase();
-            
+            // Remove database connection check since DatabaseConfig handles it automatically
             console.log('Debug - Report Request:', { plantId, startDate, endDate, format });
 
             // Fetch sensor readings
