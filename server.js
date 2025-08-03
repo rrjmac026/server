@@ -86,7 +86,7 @@ async function saveSensorData(data) {
 function isSensorDataStale(timestamp) {
   const now = moment();
   const readingTime = moment(timestamp);
-  return now.diff(readingTime, 'seconds') > 90;  // Changed to 35 seconds (30s ESP32 interval + 5s buffer)
+  return now.diff(readingTime, 'seconds') > 50;  // Changed to 35 seconds (30s ESP32 interval + 5s buffer)
 }
 
 async function getLatestReading(plantId) {
