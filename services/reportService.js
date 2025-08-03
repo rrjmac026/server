@@ -7,6 +7,91 @@ const SensorUtils = require('../utils/sensorUtils');
 const PDFUtils = require('../utils/pdfUtils');
 const AuditUtils = require('../utils/auditUtils');
 
+// Add PDF rendering helper functions
+function drawEnhancedTableHeader(doc, headers, colWidths, x, y, width) {
+    const headerHeight = 35;
+    doc.rect(x, y, width, headerHeight)
+       .fillColor('#2c5530')
+       .fill();
+    
+    doc.rect(x, y, width, 3)
+       .fillColor('#4CAF50')
+       .fill();
+    
+    let currentX = x;
+    headers.forEach((header, i) => {
+        if (i > 0) {
+            doc.moveTo(currentX, y)
+               .lineTo(currentX, y + headerHeight)
+               .strokeColor('#ffffff')
+               .strokeOpacity(0.2)
+               .lineWidth(1)
+               .stroke()
+               .strokeOpacity(1);
+        }
+        
+        doc.fillColor('#ffffff')
+           .font('Helvetica-Bold')
+           .fontSize(11)
+           .text(header.toUpperCase(), 
+                 currentX + 8, 
+                 y + 12, 
+                 { 
+                   width: colWidths[i] - 16, 
+                   align: 'left',
+                   lineBreak: false
+                 });
+        
+        currentX += colWidths[i];
+    });
+    
+    return y + headerHeight;
+}
+
+function drawEnhancedTableRow(doc, data, colWidths, x, y, width, index) {
+    const rowHeight = 22;
+    
+    if (y > doc.page.height - 75) {
+        return null;
+    }
+    
+    doc.fillColor('#f0f0f0')
+       .rect(x, y, width, rowHeight)
+       .fill();
+
+    doc.strokeColor('#000000')
+       .lineWidth(0.8)
+       .rect(x, y, width, rowHeight)
+       .stroke();
+
+    let currentX = x;
+    data.forEach((cell, i) => {
+        if (i > 0) {
+            doc.moveTo(currentX, y)
+               .lineTo(currentX, y + rowHeight)
+               .stroke();
+        }
+        
+        doc.fillColor('#000000')
+           .font('Helvetica')
+           .fontSize(9)
+           .text(
+             cell.toString(),
+             currentX + 3,
+             y + 6,
+             {
+               width: colWidths[i] - 6,
+               align: 'center',
+               lineBreak: false
+             }
+           );
+        
+        currentX += colWidths[i];
+    });
+    
+    return y + rowHeight + 2;
+}
+
 class ReportService {
     /**
      * Generate sensor data report
@@ -71,6 +156,7 @@ class ReportService {
                     });
                 });
 
+                // Draw report content
                 let currentY = PDFUtils.drawPageHeader(doc, 1, 'Plant Monitoring Report');
                 currentY += 30;
 
@@ -78,11 +164,44 @@ class ReportService {
                 currentY = this.drawReportDetails(doc, currentY, plantId, startDate, endDate, readings.length);
                 currentY += 20;
 
-                // Readings table
+                // Draw readings table with fixed column widths
+                const tableWidth = doc.page.width - 100;
+                const tableX = 50;
+                const headers = ['Date & Time', 'Temperature', 'Humidity', 'Moisture', 'Status', 'Watering', 'Fertilizer'];
+                const colWidths = [
+                    tableWidth * 0.20,
+                    tableWidth * 0.12,
+                    tableWidth * 0.12,
+                    tableWidth * 0.12,
+                    tableWidth * 0.15,
+                    tableWidth * 0.145,
+                    tableWidth * 0.145
+                ];
+
                 if (readings.length === 0) {
                     this.drawNoDataMessage(doc, currentY);
                 } else {
-                    this.drawSensorDataTable(doc, currentY, readings);
+                    currentY = drawEnhancedTableHeader(doc, headers, colWidths, tableX, currentY, tableWidth);
+                    
+                    readings.forEach((reading, index) => {
+                        if (currentY > doc.page.height - 100) {
+                            doc.addPage();
+                            currentY = PDFUtils.drawPageHeader(doc, Math.floor(index / 15) + 2);
+                            currentY = drawEnhancedTableHeader(doc, headers, colWidths, tableX, currentY, tableWidth);
+                        }
+                        
+                        const rowData = [
+                            moment(reading.timestamp).format('MM-DD HH:mm'),
+                            `${reading.temperature || 'N/A'}°C`,
+                            `${reading.humidity || 'N/A'}%`,
+                            `${reading.moisture || 'N/A'}%`,
+                            reading.moistureStatus || 'N/A',
+                            reading.waterState ? 'ON' : 'OFF',
+                            reading.fertilizerState ? 'ON' : 'OFF'
+                        ];
+                        
+                        currentY = drawEnhancedTableRow(doc, rowData, colWidths, tableX, currentY, tableWidth, index);
+                    });
                 }
 
                 PDFUtils.drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
