@@ -54,10 +54,10 @@ async function saveSensorData(data) {
     const collection = await getCollection('sensor_data');
     const result = await collection.insertOne({
         ...data,
+        // Ensure waterState and fertilizerState are boolean values
         waterState: Boolean(data.waterState),
         fertilizerState: Boolean(data.fertilizerState),
-        timestamp: data.timestamp ? new Date(data.timestamp) : moment().tz('Asia/Manila').toDate(),
-        heartbeat: Boolean(data.heartbeat)
+        timestamp: moment().tz('Asia/Manila').toDate()
     });
 
     // Also log this as an audit event
@@ -65,10 +65,10 @@ async function saveSensorData(data) {
     await auditCollection.insertOne({
         plantId: data.plantId,
         type: 'sensor',
-        action: data.heartbeat ? 'heartbeat' : 'read',
+        action: 'read',
         status: 'success',
         timestamp: moment().tz('Asia/Manila').toDate(),
-        details: data.heartbeat ? 'Heartbeat received' : 'Sensor reading recorded',
+        details: 'Sensor reading recorded',
         sensorData: {
             moisture: data.moisture,
             temperature: data.temperature,
@@ -76,8 +76,7 @@ async function saveSensorData(data) {
             moistureStatus: data.moistureStatus,
             waterState: Boolean(data.waterState),
             fertilizerState: Boolean(data.fertilizerState),
-            isConnected: data.isConnected,
-            heartbeat: Boolean(data.heartbeat)
+            isConnected: data.isConnected
         }
     });
 
@@ -87,110 +86,108 @@ async function saveSensorData(data) {
 function isSensorDataStale(timestamp) {
   const now = moment();
   const readingTime = moment(timestamp);
-  const diffInSeconds = now.diff(readingTime, 'seconds');
-  
-  console.log(`⏰ Data age check: ${diffInSeconds} seconds old`);
-  
-  // Consider data stale if it's older than 60 seconds (ESP32 sends data every 30s + buffer)
-  return diffInSeconds > 60;
+  return now.diff(readingTime, 'seconds') > 90;  // Changed to 35 seconds (30s ESP32 interval + 5s buffer)
 }
 
 async function getLatestReading(plantId) {
     const collection = await getCollection('sensor_data');
-    
-    // Get the most recent reading
     const reading = await collection.findOne(
         { plantId },
         { sort: { timestamp: -1 } }
     );
     
-    if (!reading) {
-        console.log(`📊 No readings found for plant ${plantId}`);
-        return null;
-    }
+    if (!reading) return null;
     
     const isStale = isSensorDataStale(reading.timestamp);
-    const currentTime = moment().tz('Asia/Manila');
-    const readingTime = moment(reading.timestamp).tz('Asia/Manila');
-    
-    console.log(`📊 Plant ${plantId} - Last reading: ${readingTime.format('YYYY-MM-DD HH:mm:ss')}, Current: ${currentTime.format('YYYY-MM-DD HH:mm:ss')}, Stale: ${isStale}`);
-    
-    // Determine if sensor is connected based on:
-    // 1. Data freshness (not stale)
-    // 2. The isConnected field from the reading
-    // 3. Recent heartbeat activity
     const isConnected = !isStale && reading.isConnected === true;
     
     return {
         ...reading,
         isConnected,
         isOnline: isConnected,
-        // Return 0 values when offline to clearly indicate no current data
         moisture: isConnected ? reading.moisture : 0,
         temperature: isConnected ? reading.temperature : 0,
         humidity: isConnected ? reading.humidity : 0,
-        moistureStatus: !isConnected ? "OFFLINE" : getMoistureStatus(reading.moisture),
-        // Keep the original timestamp for reference
-        lastSeenAt: reading.timestamp,
-        dataAge: moment().diff(moment(reading.timestamp), 'seconds')
+        moistureStatus: !isConnected ? "OFFLINE" : getMoistureStatus(reading.moisture)
     };
 }
 
-async function cleanupOldSensorData() {
-    try {
-        const collection = await getCollection('sensor_data');
-        const cutoffDate = moment().subtract(7, 'days').toDate(); // Keep only last 7 days
-        
-        const result = await collection.deleteMany({
-            timestamp: { $lt: cutoffDate }
-        });
-        
-        if (result.deletedCount > 0) {
-            console.log(`🧹 Cleaned up ${result.deletedCount} old sensor readings`);
-        }
-    } catch (error) {
-        console.error('❌ Error cleaning up old sensor data:', error);
-    }
+// Function to determine moisture status
+function getMoistureStatus(moisture) {
+  if (!moisture || moisture === null) return "NO DATA";
+  if (moisture === 1023) return "SENSOR ERROR";
+  if (moisture >= 1000) return "SENSOR ERROR";
+  if (moisture > 600 && moisture < 1000) return "DRY";
+  if (moisture > 370 && moisture <= 600) return "HUMID";
+  if (moisture <= 370) return "WET";
+  return "NO DATA";
 }
 
-async function checkSensorConnectivity(plantId) {
+// Add new helper functions
+async function getReadingsInRange(plantId, startDate, endDate) {
+  const collection = await getCollection('sensor_data');
+  
+  const readings = await collection.find({
+    plantId,
+    timestamp: {
+      $gte: new Date(startDate),
+      $lte: new Date(endDate)
+    }
+  }).sort({ timestamp: -1 }).toArray();
+
+  return readings;
+}
+
+async function getAllReadingsInRange(plantId, startDate, endDate, progressCallback = null) {
     const collection = await getCollection('sensor_data');
     
-    // Get the last 3 readings to determine connectivity pattern
-    const recentReadings = await collection.find(
-        { plantId },
-        { sort: { timestamp: -1 }, limit: 3 }
-    ).toArray();
+    // Convert string dates to MongoDB Date objects and set time to start/end of day
+    const start = new Date(startDate);
+    start.setHours(0, 0, 0, 0);
     
-    if (recentReadings.length === 0) {
-        return { isConnected: false, reason: 'No data found' };
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+    
+    console.log('Debug - Query params:', {
+        plantId,
+        startDate: start,
+        endDate: end
+    });
+
+    const readings = await collection.find({
+        plantId: plantId,  // Explicitly match plantId
+        timestamp: {
+            $gte: start,
+            $lte: end
+        }
+    }).sort({ timestamp: -1 }).toArray();
+
+    console.log(`Debug - Found ${readings.length} readings`);
+    
+    if (progressCallback) {
+        progressCallback(readings.length);
     }
     
-    const latestReading = recentReadings[0];
-    const now = moment();
-    const latestTime = moment(latestReading.timestamp);
-    const ageInSeconds = now.diff(latestTime, 'seconds');
-    
-    // Check if latest reading is too old
-    if (ageInSeconds > 60) {
-        return { 
-            isConnected: false, 
-            reason: `Last reading ${ageInSeconds}s ago`,
-            lastSeen: latestTime.format('YYYY-MM-DD HH:mm:ss')
-        };
-    }
-    
-    // Check if we have recent heartbeats
-    const recentHeartbeats = recentReadings.filter(r => r.heartbeat === true);
-    const hasRecentHeartbeat = recentHeartbeats.length > 0 && 
-        moment().diff(moment(recentHeartbeats[0].timestamp), 'seconds') < 120;
-    
-    return {
-        isConnected: latestReading.isConnected === true && ageInSeconds <= 60,
-        hasRecentHeartbeat,
-        dataAge: ageInSeconds,
-        reason: ageInSeconds <= 60 ? 'Active' : 'Stale data'
-    };
+    return readings;
+}
+
+function calculateStats(readings) {
+  return readings.reduce((stats, reading) => {
+    stats.totalTemperature += reading.temperature || 0;
+    stats.totalHumidity += reading.humidity || 0;
+    stats.totalMoisture += reading.moisture || 0;
+    stats.moistureStatus[reading.moistureStatus.toLowerCase()]++;
+    stats.waterStateCount += reading.waterState ? 1 : 0;
+    stats.fertilizerStateCount += reading.fertilizerState ? 1 : 0;
+    return stats;
+  }, {
+    totalTemperature: 0,
+    totalHumidity: 0,
+    totalMoisture: 0,
+    moistureStatus: { dry: 0, moist: 0, wet: 0 },
+    waterStateCount: 0,
+    fertilizerStateCount: 0
+  });
 }
 
 // ==========================
@@ -200,26 +197,19 @@ app.post("/api/sensor-data", async (req, res) => {
   try {
     const data = req.body;
 
+    // Update validation to include states
     if (!data.plantId || data.moisture == null || data.temperature == null || 
         data.humidity == null || data.waterState == null || data.fertilizerState == null) {
       return res.status(400).json({ error: "Incomplete sensor data" });
     }
 
+    // Add explicit connection state from ESP32
     data.isConnected = true;
     data.moistureStatus = getMoistureStatus(data.moisture);
     data.waterState = Boolean(data.waterState);
     data.fertilizerState = Boolean(data.fertilizerState);
-    data.heartbeat = Boolean(data.heartbeat);
 
     const result = await saveSensorData(data);
-    
-    // Log different messages based on heartbeat status
-    if (data.heartbeat) {
-      console.log(`💓 Heartbeat received from plant ${data.plantId}`);
-    } else {
-      console.log(`📡 New sensor reading from plant ${data.plantId}`);
-    }
-
     res.status(201).json({ message: "Sensor data saved", id: result.insertedId });
   } catch (error) {
     console.error("❌ Error saving sensor data:", error.message);
@@ -1741,109 +1731,3 @@ function estimateTextHeight(text, doc) {
   
   return lines * lineHeight;
 }
-
-// Add cleanup interval and initial cleanup
-setInterval(cleanupOldSensorData, 60 * 60 * 1000);
-setTimeout(cleanupOldSensorData, 5000);
-
-// Replace existing GET /api/sensor-data endpoint with enhanced version
-app.get("/api/sensor-data", async (req, res) => {
-    try {
-        const { plantId } = req.query;
-        if (!plantId) {
-            return res.status(400).json({ error: "Missing plantId" });
-        }
-
-        const latestReading = await getLatestReading(plantId);
-
-        if (!latestReading) {
-            return res.status(404).json({
-                error: 'No sensor data found',
-                moisture: 0,
-                temperature: 0,
-                humidity: 0,
-                moistureStatus: "OFFLINE",
-                waterState: false,
-                fertilizerState: false,
-                isOnline: false,
-                isConnected: false,
-                timestamp: null
-            });
-        }
-
-        const response = {
-            moisture: latestReading.isConnected ? latestReading.moisture : 0,
-            temperature: latestReading.isConnected ? latestReading.temperature : 0,
-            humidity: latestReading.isConnected ? latestReading.humidity : 0,
-            moistureStatus: latestReading.moistureStatus,
-            waterState: latestReading.isConnected ? latestReading.waterState : false,
-            fertilizerState: latestReading.isConnected ? latestReading.fertilizerState : false,
-            timestamp: moment(latestReading.timestamp.toDate()).tz('Asia/Manila').format(),
-            isOnline: latestReading.isConnected,
-            isConnected: latestReading.isConnected,
-            lastSeenAt: latestReading.lastSeenAt ? moment(latestReading.lastSeenAt).tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss') : null,
-            dataAge: latestReading.dataAge || 0
-        };
-
-        res.json(response);
-    } catch (error) {
-        console.error("❌ Error fetching sensor data:", error.message);
-        res.status(500).json({ error: "Failed to load sensor data" });
-    }
-});
-
-// Replace existing POST /api/sensor-data endpoint with enhanced version
-app.post("/api/sensor-data", async (req, res) => {
-    try {
-        const data = req.body;
-
-        if (!data.plantId || data.moisture == null || data.temperature == null || 
-            data.humidity == null || data.waterState == null || data.fertilizerState == null) {
-          return res.status(400).json({ error: "Incomplete sensor data" });
-        }
-
-        data.isConnected = true;
-        data.moistureStatus = getMoistureStatus(data.moisture);
-        data.waterState = Boolean(data.waterState);
-        data.fertilizerState = Boolean(data.fertilizerState);
-        data.heartbeat = Boolean(data.heartbeat);
-
-        const result = await saveSensorData(data);
-        
-        // Log different messages based on heartbeat status
-        if (data.heartbeat) {
-          console.log(`💓 Heartbeat received from plant ${data.plantId}`);
-        } else {
-          console.log(`📡 New sensor reading from plant ${data.plantId}`);
-        }
-
-        res.status(201).json({ message: "Sensor data saved", id: result.insertedId });
-    } catch (error) {
-        console.error("❌ Error saving sensor data:", error.message);
-        res.status(500).json({ error: "Failed to save sensor data" });
-    }
-});
-
-// Add new debug endpoint
-app.get("/api/debug/sensor-status/:plantId", async (req, res) => {
-    try {
-        const { plantId } = req.params;
-        
-        const connectivity = await checkSensorConnectivity(plantId);
-        
-        res.json({
-            success: true,
-            plantId,
-            isConnected: connectivity.isConnected,
-            lastSeen: connectivity.lastSeen ? moment(connectivity.lastSeen).tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss') : null,
-            dataAge: connectivity.dataAge,
-            reason: connectivity.reason
-        });
-    } catch (error) {
-        console.error("Error checking sensor status:", error);
-        res.status(500).json({ 
-            success: false, 
-            error: "Failed to check sensor status" 
-        });
-    }
-});
