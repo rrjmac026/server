@@ -1,6 +1,5 @@
 const PDFDocument = require('pdfkit');
 const moment = require('moment-timezone');
-const DatabaseConfig = require('../config/database');
 const SensorService = require('./sensorService');
 const AuditService = require('./auditService');
 const SensorUtils = require('../utils/sensorUtils');
