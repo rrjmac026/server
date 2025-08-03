@@ -1,4 +1,5 @@
 const ReportService = require('../services/reportService');
+const AuditService = require('../services/auditService');
 const moment = require('moment-timezone');
 
 class ReportController {
@@ -16,20 +17,17 @@ class ReportController {
                 });
             }
 
-            // Create audit log entry for report generation
-            await ReportService.logReportGeneration(plantId, 'sensor', format, start, end, 'started');
-
             const result = await ReportService.generateSensorReport(plantId, start, end, format);
 
             if (format === 'json') {
-                await ReportService.logReportGeneration(plantId, 'sensor', format, start, end, 'success');
+                await AuditService.logReportGeneration(plantId, format, start, end, true);
                 return res.json(result.data);
             }
 
             if (format === 'pdf') {
                 res.setHeader('Content-Type', 'application/pdf');
                 res.setHeader('Content-Disposition', `attachment; filename=${result.filename}`);
-                await ReportService.logReportGeneration(plantId, 'sensor', format, start, end, 'success');
+                await AuditService.logReportGeneration(plantId, format, start, end, true);
                 return res.send(result.buffer);
             }
 
@@ -39,9 +37,13 @@ class ReportController {
             
             // Log failed report generation
             try {
-                await ReportService.logReportGeneration(
-                    req.query.plantId, 'sensor', req.query.format, 
-                    req.query.start, req.query.end, 'failed', error.message
+                await AuditService.logReportGeneration(
+                    req.query.plantId, 
+                    req.query.format, 
+                    req.query.start, 
+                    req.query.end, 
+                    false, 
+                    error.message
                 );
             } catch (auditError) {
                 console.error("Failed to log report generation error:", auditError);
@@ -72,20 +74,17 @@ class ReportController {
 
             console.log('Debug - Report Request:', { plantId, start, end, format });
 
-            // Create audit log entry for report generation
-            await ReportService.logReportGeneration(plantId, 'sensor', format, start, end, 'started');
-
             const result = await ReportService.generateSensorReport(plantId, start, end, format);
 
             if (format === 'json') {
-                await ReportService.logReportGeneration(plantId, 'sensor', format, start, end, 'success');
+                await AuditService.logReportGeneration(plantId, format, start, end, true);
                 return res.json(result.data);
             }
 
             if (format === 'pdf') {
                 res.setHeader('Content-Type', 'application/pdf');
                 res.setHeader('Content-Disposition', `attachment; filename=${result.filename}`);
-                await ReportService.logReportGeneration(plantId, 'sensor', format, start, end, 'success');
+                await AuditService.logReportGeneration(plantId, format, start, end, true);
                 return res.send(result.buffer);
             }
 
@@ -95,9 +94,13 @@ class ReportController {
             
             // Log failed report generation
             try {
-                await ReportService.logReportGeneration(
-                    req.params.plantId, 'sensor', req.query.format, 
-                    req.query.start, req.query.end, 'failed', error.message
+                await AuditService.logReportGeneration(
+                    req.params.plantId,
+                    req.query.format,
+                    req.query.start,
+                    req.query.end,
+                    false,
+                    error.message
                 );
             } catch (auditError) {
                 console.error("Failed to log report generation error:", auditError);
