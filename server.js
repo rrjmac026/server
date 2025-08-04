@@ -90,7 +90,7 @@ function isSensorDataStale(timestamp) {
 }
 
 async function getLatestReading(plantId) {
-    const collection = await getCollection('sensor_data');Q
+    const collection = await getCollection('sensor_data');
     const reading = await collection.findOne(
         { plantId },
         { sort: { timestamp: -1 } }
@@ -370,280 +370,6 @@ app.get("/api/reports", async (req, res) => {
       
       doc.font('Helvetica')
          .fontSize(11) // Slightly larger font
-         .fillColor('#000000');
-      
-      // Details rows with better spacing
-      const detailsData = [
-        ['Plant ID:', plantId, 'Generated:', moment().tz('Asia/Manila').format('YYYY-MM-DD LT')],
-        ['Period:', `${moment(start).format('YYYY-MM-DD')} to ${moment(end).format('YYYY-MM-DD')}`, 'Total Records:', readings.length.toString()]
-      ];
-      
-      detailsData.forEach((row, i) => {
-        const rowY = currentY + (i * 30) + 15; // Better vertical spacing
-        doc.font('Helvetica-Bold').text(row[0], startX + 20, rowY);
-        doc.font('Helvetica').text(row[1], startX + 100, rowY); // Adjusted X position
-        doc.font('Helvetica-Bold').text(row[2], startX + 220, rowY);
-        doc.font('Helvetica').text(row[3], startX + 300, rowY); // Adjusted X position
-      });
-      
-      currentY += 100; // Increased spacing after details
-
-      // Readings table with better spacing
-      const tableWidth = doc.page.width - 100;
-      const tableX = 50;
-      
-      const headers = ['Date & Time', 'Temperature', 'Humidity', 'Moisture', 'Status', 'Watering', 'Fertilizer'];
-      currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
-      
-      readings.forEach((reading, index) => {
-        if (currentY > doc.page.height - 100) { // More space for footer
-          doc.addPage();
-          currentY = drawPageHeader(doc, Math.floor(index / 15) + 2); // Fewer rows per page
-          currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
-        }
-        
-        const rowData = [
-          moment(reading.timestamp).format('MM-DD HH:mm'), // Shorter date format
-          `${reading.temperature || 'N/A'}°C`,
-          `${reading.humidity || 'N/A'}%`,
-          `${reading.moisture || 'N/A'}%`,
-          reading.moistureStatus || 'N/A',
-          reading.wateringStatus || '-',
-          reading.fertilizerStatus || '-'
-        ];
-        
-        currentY = drawTableRow(doc, rowData, tableX, currentY, tableWidth);
-      });
-      
-      drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
-      
-      doc.end();
-    } else {
-      // JSON format - return all readings
-      const stats = calculateStats(readings);
-      res.json({ 
-        totalReadings: readings.length,
-        stats,
-        allReadings: readings
-      });
-    }
-
-  } catch (error) {
-    console.error("❌ Report generation error:", error);
-    
-    // Log failed report generation
-    try {
-      const auditCollection = await getCollection('audit_logs');
-      await auditCollection.insertOne({
-        plantId: req.query.plantId,
-        type: 'report',
-        action: 'generate',
-        status: 'failed',
-        timestamp: moment().tz('Asia/Manila').toDate(),
-        details: `Failed to generate report: ${error.message}`,
-      });
-    } catch (auditError) {
-      console.error("Failed to log report generation error:", auditError);
-    }
-
-    res.status(500).json({ 
-      error: "Failed to generate report", 
-      details: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
-  }
-});
-
-// ==========================
-// ✅ PDF Report Endpoint (with URL params) - FIXED VERSION
-// ==========================
-app.get("/api/reports/:plantId", async (req, res) => {
-  try {
-    const { plantId } = req.params;
-    const { start, end, format = 'pdf' } = req.query;
-    
-    if (!start || !end) {
-      return res.status(400).json({
-        error: "Missing parameters",
-        example: "/api/reports/PLANT123?start=2024-01-01&end=2024-01-31&format=pdf|json"
-      });
-    }
-
-    console.log('Debug - Report Request:', { plantId, start, end, format });
-
-    // Fetch all readings with debug logging
-    const readings = await getAllReadingsInRange(plantId, start, end);
-    console.log(`Debug - Total readings found: ${readings?.length || 0}`);
-
-    if (!readings || readings.length === 0) {
-      console.log('Debug - No readings found for criteria:', { plantId, start, end });
-      if (format === 'json') {
-        return res.json({ 
-          totalReadings: 0,
-          stats: calculateStats([]),
-          allReadings: []
-        });
-      }
-    }
-
-    if (format === 'pdf') {
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename=plant-report-${plantId}.pdf`);
-      
-      const doc = new PDFDocument({ margin: 50 });
-      doc.pipe(res);
-
-      let currentY = drawPageHeader(doc, 1, 'Plant Monitoring Report');
-      currentY += 30; // Increased spacing after header
-
-      // Report details in a centered table
-      const reportDetailsWidth = 400;
-      const startX = (doc.page.width - reportDetailsWidth) / 2;
-      
-      // Details table background
-      doc.rect(startX, currentY, reportDetailsWidth, 80) // Increased height
-         .fillColor('#f9f9f9')
-         .fill();
-      
-      doc.font('Helvetica')
-         .fontSize(10)
-         .fillColor('#000000');
-      
-      // Details rows with better spacing
-      const detailsData = [
-        ['Plant ID:', plantId, 'Generated:', moment().tz('Asia/Manila').format('YYYY-MM-DD LT')],
-        ['Period:', `${moment(start).format('YYYY-MM-DD')} to ${moment(end).format('YYYY-MM-DD')}`, 'Total Records:', readings.length.toString()]
-      ];
-      
-      detailsData.forEach((row, i) => {
-        const rowY = currentY + (i * 30) + 15; // Better vertical spacing
-        doc.font('Helvetica-Bold').text(row[0], startX + 20, rowY);
-        doc.font('Helvetica').text(row[1], startX + 100, rowY); // Adjusted X position
-        doc.font('Helvetica-Bold').text(row[2], startX + 220, rowY);
-        doc.font('Helvetica').text(row[3], startX + 300, rowY); // Adjusted X position
-      });
-      
-      currentY += 100; // Increased spacing after details
-
-      // Readings table with better spacing
-      const tableWidth = doc.page.width - 100;
-      const tableX = 50;
-      
-      const headers = ['Date & Time', 'Temperature', 'Humidity', 'Moisture', 'Status', 'Watering', 'Fertilizer'];
-      currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
-      
-      readings.forEach((reading, index) => {
-        if (currentY > doc.page.height - 100) { // More space for footer
-          doc.addPage();
-          currentY = drawPageHeader(doc, Math.floor(index / 15) + 2); // Fewer rows per page
-          currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
-        }
-        
-        const rowData = [
-          moment(reading.timestamp).format('MM-DD HH:mm'), // Shorter date format
-          `${reading.temperature || 'N/A'}°C`,
-          `${reading.humidity || 'N/A'}%`,
-          `${reading.moisture || 'N/A'}%`,
-          reading.moistureStatus || 'N/A',
-          reading.wateringStatus || '-',
-          reading.fertilizerStatus || '-'
-        ];
-        
-        currentY = drawTableRow(doc, rowData, tableX, currentY, tableWidth);
-      });
-      
-      drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
-      
-      doc.end();
-    } else {
-      // JSON format - return all readings
-      const stats = calculateStats(readings);
-      res.json({ 
-        totalReadings: readings.length,
-        stats,
-        allReadings: readings
-      });
-    }
-
-  } catch (error) {
-    console.error("❌ Report generation error:", error);
-    
-    // Log failed report generation
-    try {
-      const auditCollection = await getCollection('audit_logs');
-      await auditCollection.insertOne({
-        plantId: req.query.plantId,
-        type: 'report',
-        action: 'generate',
-        status: 'failed',
-        timestamp: moment().tz('Asia/Manila').toDate(),
-        details: `Failed to generate report: ${error.message}`,
-      });
-    } catch (auditError) {
-      console.error("Failed to log report generation error:", auditError);
-    }
-
-    res.status(500).json({ 
-      error: "Failed to generate report", 
-      details: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
-  }
-});
-
-// ==========================
-// ✅ PDF Report Endpoint (with URL params) - FIXED VERSION
-// ==========================
-app.get("/api/reports/:plantId", async (req, res) => {
-  try {
-    const { plantId } = req.params;
-    const { start, end, format = 'pdf' } = req.query;
-    
-    if (!start || !end) {
-      return res.status(400).json({
-        error: "Missing parameters",
-        example: "/api/reports/PLANT123?start=2024-01-01&end=2024-01-31&format=pdf|json"
-      });
-    }
-
-    console.log('Debug - Report Request:', { plantId, start, end, format });
-
-    // Fetch all readings with debug logging
-    const readings = await getAllReadingsInRange(plantId, start, end);
-    console.log(`Debug - Total readings found: ${readings?.length || 0}`);
-
-    if (!readings || readings.length === 0) {
-      console.log('Debug - No readings found for criteria:', { plantId, start, end });
-      if (format === 'json') {
-        return res.json({ 
-          totalReadings: 0,
-          stats: calculateStats([]),
-          allReadings: []
-        });
-      }
-    }
-
-    if (format === 'pdf') {
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename=plant-report-${plantId}.pdf`);
-      
-      const doc = new PDFDocument({ margin: 50 });
-      doc.pipe(res);
-
-      let currentY = drawPageHeader(doc, 1, 'Plant Monitoring Report');
-      currentY += 30; // Increased spacing after header
-
-      // Report details in a centered table
-      const reportDetailsWidth = 400;
-      const startX = (doc.page.width - reportDetailsWidth) / 2;
-      
-      // Details table background
-      doc.rect(startX, currentY, reportDetailsWidth, 80) // Increased height
-         .fillColor('#f9f9f9')
-         .fill();
-      
-      doc.font('Helvetica')
-         .fontSize(10)
          .fillColor('#000000');
       
       // Details rows with better spacing
@@ -1958,37 +1684,22 @@ function sanitizeAuditLog(log) {
 
 // Helper function to validate schedule data
 function validateScheduleData(data) {
+  // If any of these fields are missing or null, return specific error
   if (!data) return 'Schedule data is required';
   if (!data.plantId) return 'Plant ID is required';
   if (!data.type || !['watering', 'fertilizing'].includes(data.type)) return 'Valid type (watering or fertilizing) is required';
   if (!data.time || !/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/.test(data.time)) return 'Valid time in HH:MM format is required';
+  if (!Array.isArray(data.days) || data.days.length === 0) return 'At least one day of the week is required';
+  if (typeof data.duration !== 'number' || data.duration < 1 || data.duration > 60) return 'Duration must be between 1 and 60 minutes';
   
-  // Validate days based on schedule type
-  if (data.type === 'watering') {
-    if (!Array.isArray(data.days) || data.days.length === 0) {
-      return 'At least one day of the week is required for watering schedules';
-    }
-  } else if (data.type === 'fertilizing') {
-    if (!Array.isArray(data.calendarDays) || data.calendarDays.length === 0) {
-      return 'At least one calendar day is required for fertilizing schedules';
-    }
-  }
-
-  if (typeof data.duration !== 'number' || data.duration < 1 || data.duration > 60) {
-    return 'Duration must be between 1 and 60 minutes';
-  }
-
-  return null;
+  return null; // No validation errors
 }
 
-// Create a new schedule - UPDATED VERSION
+// Create a new schedule
 app.post('/api/schedules', async (req, res) => {
   try {
-    console.log('Received schedule data:', req.body);
     const validationError = validateScheduleData(req.body);
-    
     if (validationError) {
-      console.log('Validation error:', validationError);
       return res.status(400).json({ 
         success: false, 
         error: validationError 
@@ -2002,22 +1713,12 @@ app.post('/api/schedules', async (req, res) => {
       createdAt: moment().tz('Asia/Manila').toDate(),
       updatedAt: moment().tz('Asia/Manila').toDate()
     };
-
-    // Ensure consistent boolean values
-    if (scheduleData.settings) {
-      if (scheduleData.settings.enabled !== undefined) {
-        scheduleData.settings.enabled = Boolean(scheduleData.settings.enabled);
-      }
-    }
     
-    console.log('Saving schedule data:', scheduleData);
     const result = await collection.insertOne(scheduleData);
-    
-    // Create successful response with the complete schedule data
     const insertedSchedule = {
       ...scheduleData,
       _id: result.insertedId,
-      id: result.insertedId.toString()
+      id: result.insertedId.toString() // Add id field for client compatibility
     };
 
     // Create audit log entry
@@ -2032,32 +1733,13 @@ app.post('/api/schedules', async (req, res) => {
       scheduleData: scheduleData
     });
 
-    console.log('Schedule created successfully:', result.insertedId);
     res.status(201).json({ 
       success: true, 
-      schedule: insertedSchedule,
-      id: result.insertedId.toString()
+      id: result.insertedId.toString(),
+      schedule: insertedSchedule
     });
-
   } catch (error) {
-    console.error('Error creating schedule:', error);
-    
-    // Log failed schedule creation
-    try {
-      const auditCollection = await getCollection('audit_logs');
-      await auditCollection.insertOne({
-        plantId: req.body.plantId,
-        type: 'schedule',
-        action: 'create',
-        status: 'failed',
-        timestamp: moment().tz('Asia/Manila').toDate(),
-        details: `Failed to create schedule: ${error.message}`,
-        error: error.message
-      });
-    } catch (auditError) {
-      console.error('Failed to log schedule creation error:', auditError);
-    }
-
+    console.error('❌ Error creating schedule:', error);
     res.status(500).json({ 
       success: false, 
       error: 'Failed to create schedule',

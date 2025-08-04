@@ -513,8 +513,6 @@ void setup() {
     pinMode(fertilizerRelayPin, OUTPUT);
     digitalWrite(fertilizerRelayPin, LOW); // Start with fertilizer OFF
 
-    Serial.begin(115200);
-
     // Connect to WiFi with retry
     WiFi.begin(ssid, password);
     int attempts = 0;
