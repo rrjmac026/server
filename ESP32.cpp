@@ -72,7 +72,9 @@ struct Schedule {
     String time;
     int duration;
     bool enabled;
-    std::vector<String> days;  // Add days vector for fertilizer schedules
+    std::vector<String> days;
+    int moistureThreshold;     // New field
+    String moistureMode;       // New field
 };
 
 std::vector<Schedule> schedules;
@@ -305,18 +307,10 @@ bool syncTime() {
     return false;
 }
 
-// Replace the server communication function
-void sendDataToServer(int moisture, bool waterState, float temperature, float humidity, bool isHeartbeat = false) {
-    unsigned long currentMillis = millis();  // Add this line
-
+// Update the server communication function
+void sendDataToServer(int moisture, bool waterState, float temperature, float humidity) {
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("❌ WiFi not connected");
-        return;
-    }
-
-    // Skip invalid DHT readings
-    if (isnan(temperature) || isnan(humidity)) {
-        Serial.println("❌ Invalid DHT readings, skipping transmission");
         return;
     }
 
@@ -338,8 +332,7 @@ void sendDataToServer(int moisture, bool waterState, float temperature, float hu
     doc["waterState"] = waterState;
     doc["fertilizerState"] = fertilizerState;
     doc["timestamp"] = timestamp;
-    doc["isConnected"] = true;
-    doc["heartbeat"] = isHeartbeat;  // Add heartbeat field
+    doc["isConnected"] = true;  // Add explicit connection state
 
     String jsonString;
     serializeJson(doc, jsonString);
@@ -401,20 +394,6 @@ void sendDataToServer(int moisture, bool waterState, float temperature, float hu
         }
         http.end();
     }
-
-    if (success) {
-        // Update last sent values only on successful transmission
-        lastSentTemp = temperature;
-        lastSentHumidity = humidity;
-        lastSentMoisture = convertToMoisturePercent(moisture);
-        lastHeartbeatTime = currentMillis;
-
-        if (isHeartbeat) {
-            Serial.println("💓 Heartbeat sent successfully");
-        } else {
-            Serial.println("📡 Sensor update sent successfully");
-        }
-    }
 }
 
 // Schedule fetching function
@@ -424,6 +403,7 @@ void fetchSchedules() {
         return;
     }
 
+    Serial.println("\n📅 Fetching schedules...");
     HTTPClient http;
     String url = String(serverUrl) + "/schedules/" + FIXED_PLANT_ID + "?enabled=true";
     http.begin(url);
@@ -431,12 +411,13 @@ void fetchSchedules() {
     int httpCode = http.GET();
     if (httpCode > 0) {
         String payload = http.getString();
+        Serial.println("✅ Got response from server");
         
-        // Parse JSON response
         StaticJsonDocument<1024> doc;
         DeserializationError error = deserializeJson(doc, payload);
         
         if (!error) {
+            int oldSize = schedules.size();
             schedules.clear();
             JsonArray schedulesArray = doc["schedules"];
             
@@ -447,9 +428,49 @@ void fetchSchedules() {
                 schedule.time = scheduleObj["time"].as<String>();
                 schedule.duration = scheduleObj["duration"].as<int>();
                 schedule.enabled = scheduleObj["enabled"].as<bool>();
+                
+                // Set default values first
+                schedule.moistureThreshold = 60;
+                schedule.moistureMode = "manual";
+                
+                // Override with actual values if present
+                if (scheduleObj.containsKey("moistureThreshold")) {
+                    schedule.moistureThreshold = scheduleObj["moistureThreshold"].as<int>();
+                }
+                if (scheduleObj.containsKey("moistureMode")) {
+                    schedule.moistureMode = scheduleObj["moistureMode"].as<String>();
+                }
+                
+                // Handle days array if present
+                if (scheduleObj.containsKey("days")) {
+                    JsonArray daysArray = scheduleObj["days"];
+                    for (JsonVariant day : daysArray) {
+                        schedule.days.push_back(day.as<String>());
+                    }
+                }
+                
                 schedules.push_back(schedule);
             }
+
+            Serial.printf("📅 Schedules updated: %d schedules loaded\n", schedules.size());
+            if (schedules.size() > 0) {
+                Serial.println("Current schedules:");
+                for (const auto& schedule : schedules) {
+                    Serial.printf("  • ID: %d, Type: %s, Time: %s, Enabled: %s\n",
+                        schedule.id,
+                        schedule.type.c_str(),
+                        schedule.time.c_str(),
+                        schedule.enabled ? "Yes" : "No"
+                    );
+                }
+            } else {
+                Serial.println("No active schedules found");
+            }
+        } else {
+            Serial.println("❌ Failed to parse schedules JSON");
         }
+    } else {
+        Serial.println("❌ Failed to fetch schedules");
     }
     
     http.end();
@@ -676,18 +697,6 @@ bool lastFertilizerState = false;
 // Add new global variable for diagnostics logging
 unsigned long lastDiagnosticsLog = 0;
 
-// Remove or comment out these duplicate declarations:
-// float lastSentTemp = 0;
-// float lastSentHumidity = 0;
-// int lastSentMoisture = 0;
-// unsigned long lastHeartbeatTime = 0;
-
-// Define thresholds
-const float TEMP_THRESHOLD = 0.5;     // ±0.5°C
-const float HUMIDITY_THRESHOLD = 3.0;  // ±3%
-const float MOISTURE_THRESHOLD = 5.0;  // ±5%
-const unsigned long HEARTBEAT_INTERVAL = 600000;  // 10 minutes in milliseconds
-
 void loop() {
     unsigned long currentMillis = millis();
     static int moisturePercent = 0;  // Add this line to declare moisturePercent
@@ -742,10 +751,8 @@ void loop() {
 
     // Send data every 30 seconds
     if (currentMillis - lastSendTime >= SEND_INTERVAL) {
-        sendDataToServer(soilMoistureValue, waterState, temperature, humidity, false);
+        sendDataToServer(soilMoistureValue, waterState, temperature, humidity);
         lastSendTime = currentMillis;
-    } else if (currentMillis - lastHeartbeatTime >= HEARTBEAT_INTERVAL) {
-        sendDataToServer(soilMoistureValue, waterState, temperature, humidity, true);
     }
 
     resumeWatchdog();
@@ -798,17 +805,31 @@ void loop() {
         }
     } else {
         Serial.println("💧 Water Pump Status: OFF");  // Add this line
-        // Only start watering if soil is dry
-        if (moisturePercent > dryThreshold && moisturePercent < disconnectedThreshold) {  // DRY condition only
+        // Find applicable watering schedule
+        Schedule* activeSchedule = nullptr;
+        for (auto& schedule : schedules) {
+            if (schedule.type == "watering" && schedule.enabled) {
+                activeSchedule = &schedule;
+                break;
+            }
+        }
+
+        // Get threshold from schedule or use default
+        int currentThreshold = (activeSchedule) ? activeSchedule->moistureThreshold : 60;
+        bool isAutoMode = (activeSchedule) ? (activeSchedule->moistureMode == "auto") : false;
+
+        // Only start automatic watering if in auto mode and soil is dry
+        if (isAutoMode && moisturePercent > currentThreshold && moisturePercent < disconnectedThreshold) {
             waterState = true;
             previousWaterMillis = currentMillis;
             digitalWrite(waterRelayPin, HIGH);
             
-            String details = "Moisture: " + String(moisturePercent) + "%";
+            String details = "Moisture: " + String(moisturePercent) + "% (Threshold: " + String(currentThreshold) + "%)";
             sendEventData("watering", "started", details.c_str());
             
             Serial.println("Water pump ON: " + moistureStatus);
-            String smsMessage = "Smart Plant System: Started watering. Soil is dry (" + String(soilMoistureValue) + " reading)";
+            String smsMessage = "Smart Plant System: Started watering. Soil is dry (" + 
+                              String(moisturePercent) + "%, Threshold: " + String(currentThreshold) + "%)";
             queueSMS(smsMessage.c_str());
         }
     }
