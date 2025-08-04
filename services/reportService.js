@@ -5,6 +5,7 @@ const AuditService = require('./auditService');
 const SensorUtils = require('../utils/sensorUtils');
 const PDFUtils = require('../utils/pdfUtils');
 const AuditUtils = require('../utils/auditUtils');
+const DatabaseConfig = require('../config/database');
 
 // Add PDF rendering helper functions
 function drawEnhancedTableHeader(doc, headers, colWidths, x, y, width) {
