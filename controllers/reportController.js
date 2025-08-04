@@ -6,113 +6,152 @@ class ReportController {
     /**
      * Generate sensor data report
      */
-    static async generateSensorReport(req, res) {
-        try {
-            const { plantId, start, end, format = 'pdf' } = req.query;
-            
-            if (!plantId || !start || !end) {
-                return res.status(400).json({
-                    error: "Missing parameters",
-                    example: "/api/reports?plantId=123&start=2024-01-01&end=2024-01-31&format=pdf|json"
-                });
-            }
-
-            const result = await ReportService.generateSensorReport(plantId, start, end, format);
-
-            if (format === 'json') {
-                await AuditService.logReportGeneration(plantId, format, start, end, true);
-                return res.json(result.data);
-            }
-
-            if (format === 'pdf') {
-                res.setHeader('Content-Type', 'application/pdf');
-                res.setHeader('Content-Disposition', `attachment; filename=${result.filename}`);
-                await AuditService.logReportGeneration(plantId, format, start, end, true);
-                return res.send(result.buffer);
-            }
-
-            res.status(400).json({ error: "Invalid format specified" });
-        } catch (error) {
-            console.error("❌ Report generation error:", error);
-            
-            // Log failed report generation
-            try {
-                await AuditService.logReportGeneration(
-                    req.query.plantId, 
-                    req.query.format, 
-                    req.query.start, 
-                    req.query.end, 
-                    false, 
-                    error.message
-                );
-            } catch (auditError) {
-                console.error("Failed to log report generation error:", auditError);
-            }
-
-            res.status(500).json({ 
-                error: "Failed to generate report", 
-                details: error.message,
-                stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-            });
-        }
-    }
-
     /**
-     * Generate sensor data report with plant ID in URL
-     */
-    static async generateSensorReportByPlantId(req, res) {
-        try {
-            const { plantId } = req.params;
-            const { start, end, format = 'pdf' } = req.query;
-            
-            if (!start || !end) {
-                return res.status(400).json({
-                    error: "Missing parameters",
-                    example: "/api/reports/PLANT123?start=2024-01-01&end=2024-01-31&format=pdf|json"
-                });
-            }
-
-            console.log('Debug - Report Request:', { plantId, start, end, format });
-
-            const result = await ReportService.generateSensorReport(plantId, start, end, format);
-
-            if (format === 'json') {
-                await AuditService.logReportGeneration(plantId, format, start, end, true);
-                return res.json(result.data);
-            }
-
-            if (format === 'pdf') {
-                res.setHeader('Content-Type', 'application/pdf');
-                res.setHeader('Content-Disposition', `attachment; filename=${result.filename}`);
-                await AuditService.logReportGeneration(plantId, format, start, end, true);
-                return res.send(result.buffer);
-            }
-
-            res.status(400).json({ error: "Invalid format specified" });
-        } catch (error) {
-            console.error("❌ Report generation error:", error);
-            
-            // Log failed report generation
-            try {
-                await AuditService.logReportGeneration(
-                    req.params.plantId,
-                    req.query.format,
-                    req.query.start,
-                    req.query.end,
-                    false,
-                    error.message
-                );
-            } catch (auditError) {
-                console.error("Failed to log report generation error:", auditError);
-            }
-
-            res.status(500).json({ 
-                error: "Failed to generate report", 
-                details: error.message,
-                stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+ * Generate sensor data report
+ */
+static async generateSensorReport(req, res) {
+    try {
+        const { plantId, start, end, format = 'pdf', style } = req.query;
+        
+        if (!plantId || !start || !end) {
+            return res.status(400).json({
+                error: "Missing parameters",
+                example: "/api/reports?plantId=123&start=2024-01-01&end=2024-01-31&format=pdf|json"
             });
         }
+
+        // Parse style parameter if provided
+        let parsedStyle = null;
+        if (style) {
+            try {
+                parsedStyle = JSON.parse(decodeURIComponent(style));
+                console.log('Parsed style configuration:', parsedStyle);
+            } catch (styleError) {
+                console.warn('Invalid style parameter:', styleError.message);
+                // Continue without custom styling
+            }
+        }
+
+        const result = await ReportService.generateSensorReport(plantId, start, end, format, parsedStyle);
+
+        if (format === 'json') {
+            await AuditService.logReportGeneration(plantId, format, start, end, true);
+            return res.json(result.data);
+        }
+
+        if (format === 'pdf') {
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename=${result.filename}`);
+            await AuditService.logReportGeneration(plantId, format, start, end, true);
+            return res.send(result.buffer);
+        }
+
+        res.status(400).json({ error: "Invalid format specified" });
+    } catch (error) {
+        console.error("❌ Report generation error:", error);
+        
+        // Log failed report generation
+        try {
+            await AuditService.logReportGeneration(
+                req.query.plantId, 
+                req.query.format, 
+                req.query.start, 
+                req.query.end, 
+                false, 
+                error.message
+            );
+        } catch (auditError) {
+            console.error("Failed to log report generation error:", auditError);
+        }
+
+        // Check if it's a database connection error
+        const isDbError = error.message.includes('Database connection failed') || 
+                         error.message.includes('MONGODB_URI') ||
+                         error.message.includes('connectToDatabase');
+
+        res.status(500).json({ 
+            error: "Failed to generate report", 
+            details: error.message,
+            type: isDbError ? 'database_error' : 'generation_error',
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
     }
+}
+
+/**
+ * Generate sensor data report with plant ID in URL
+ */
+static async generateSensorReportByPlantId(req, res) {
+    try {
+        const { plantId } = req.params;
+        const { start, end, format = 'pdf', style } = req.query;
+        
+        if (!start || !end) {
+            return res.status(400).json({
+                error: "Missing parameters",
+                example: "/api/reports/PLANT123?start=2024-01-01&end=2024-01-31&format=pdf|json"
+            });
+        }
+
+        console.log('Debug - Report Request:', { plantId, start, end, format });
+
+        // Parse style parameter if provided
+        let parsedStyle = null;
+        if (style) {
+            try {
+                parsedStyle = JSON.parse(decodeURIComponent(style));
+                console.log('Parsed style configuration:', parsedStyle);
+            } catch (styleError) {
+                console.warn('Invalid style parameter:', styleError.message);
+                // Continue without custom styling
+            }
+        }
+
+        const result = await ReportService.generateSensorReport(plantId, start, end, format, parsedStyle);
+
+        if (format === 'json') {
+            await AuditService.logReportGeneration(plantId, format, start, end, true);
+            return res.json(result.data);
+        }
+
+        if (format === 'pdf') {
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename=${result.filename}`);
+            await AuditService.logReportGeneration(plantId, format, start, end, true);
+            return res.send(result.buffer);
+        }
+
+        res.status(400).json({ error: "Invalid format specified" });
+    } catch (error) {
+        console.error("❌ Report generation error:", error);
+        
+        // Log failed report generation
+        try {
+            await AuditService.logReportGeneration(
+                req.params.plantId,
+                req.query.format,
+                req.query.start,
+                req.query.end,
+                false,
+                error.message
+            );
+        } catch (auditError) {
+            console.error("Failed to log report generation error:", auditError);
+        }
+
+        // Check if it's a database connection error
+        const isDbError = error.message.includes('Database connection failed') || 
+                         error.message.includes('MONGODB_URI') ||
+                         error.message.includes('connectToDatabase');
+
+        res.status(500).json({ 
+            error: "Failed to generate report", 
+            details: error.message,
+            type: isDbError ? 'database_error' : 'generation_error',
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+    }
+}
 
     /**
      * Generate audit logs report

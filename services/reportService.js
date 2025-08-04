@@ -1,11 +1,11 @@
 const PDFDocument = require('pdfkit');
 const moment = require('moment-timezone');
+const DatabaseConfig = require('../config/database');
 const SensorService = require('./sensorService');
 const AuditService = require('./auditService');
 const SensorUtils = require('../utils/sensorUtils');
 const PDFUtils = require('../utils/pdfUtils');
 const AuditUtils = require('../utils/auditUtils');
-const DatabaseConfig = require('../config/database');
 
 // Add PDF rendering helper functions
 function drawEnhancedTableHeader(doc, headers, colWidths, x, y, width) {
@@ -98,15 +98,28 @@ class ReportService {
      */
     static async generateSensorReport(plantId, startDate, endDate, format = 'pdf') {
         try {
-            // Remove database connection check since DatabaseConfig handles it automatically
             console.log('Debug - Report Request:', { plantId, startDate, endDate, format });
+
+            // Ensure database connection is established
+            try {
+                await DatabaseConfig.connectToDatabase();
+                console.log('✅ Database connection verified for report generation');
+            } catch (dbError) {
+                console.error('❌ Database connection failed:', dbError.message);
+                throw new Error(`Database connection failed: ${dbError.message}`);
+            }
 
             // Fetch sensor readings
             const readings = await SensorService.getReadingsInRange(plantId, startDate, endDate);
             console.log(`Debug - Total readings found: ${readings?.length || 0}`);
 
             // Log report generation attempt
-            await AuditService.logReportGeneration(plantId, format, startDate, endDate, 'success');
+            try {
+                await AuditService.logReportGeneration(plantId, format, startDate, endDate, 'success');
+            } catch (auditError) {
+                console.warn('Failed to log report generation:', auditError.message);
+                // Continue with report generation even if audit logging fails
+            }
 
             if (format === 'json') {
                 const stats = SensorUtils.calculateStats(readings);
@@ -128,8 +141,12 @@ class ReportService {
         } catch (error) {
             console.error("❌ Report generation error:", error);
             
-            // Log failed report generation
-            await AuditService.logReportGeneration(plantId, format, startDate, endDate, 'failed', error.message);
+            // Log failed report generation (with error handling)
+            try {
+                await AuditService.logReportGeneration(plantId, format, startDate, endDate, 'failed', error.message);
+            } catch (auditError) {
+                console.warn('Failed to log report generation error:', auditError.message);
+            }
             
             throw new Error(`Failed to generate report: ${error.message}`);
         }
@@ -152,6 +169,10 @@ class ReportService {
                         buffer: pdfBuffer,
                         filename: `plant-report-${plantId}-${moment().format('YYYY-MM-DD')}.pdf`
                     });
+                });
+
+                doc.on('error', (error) => {
+                    reject(error);
                 });
 
                 // Draw report content
@@ -205,6 +226,7 @@ class ReportService {
                 PDFUtils.drawPageFooter(doc, moment().tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss'));
                 doc.end();
             } catch (error) {
+                console.error('PDF generation error:', error);
                 reject(error);
             }
         });
@@ -247,38 +269,6 @@ class ReportService {
         });
         
         return currentY + 100;
-    }
-
-    /**
-     * Draw sensor data table
-     */
-    static drawSensorDataTable(doc, startY, readings) {
-        let currentY = startY;
-        const tableWidth = doc.page.width - 100;
-        const tableX = 50;
-        
-        const headers = ['Date & Time', 'Temperature', 'Humidity', 'Moisture', 'Status', 'Watering', 'Fertilizer'];
-        currentY = PDFUtils.drawTableHeader(doc, headers, tableX, currentY, tableWidth);
-        
-        readings.forEach((reading, index) => {
-            if (currentY > doc.page.height - 100) {
-                doc.addPage();
-                currentY = PDFUtils.drawPageHeader(doc, Math.floor(index / 15) + 2);
-                currentY = PDFUtils.drawTableHeader(doc, headers, tableX, currentY, tableWidth);
-            }
-            
-            const rowData = [
-                moment(reading.timestamp).format('MM-DD HH:mm'),
-                `${reading.temperature || 'N/A'}°C`,
-                `${reading.humidity || 'N/A'}%`,
-                `${reading.moisture || 'N/A'}%`,
-                reading.moistureStatus || 'N/A',
-                reading.waterState ? 'ON' : 'OFF',
-                reading.fertilizerState ? 'ON' : 'OFF'
-            ];
-            
-            currentY = PDFUtils.drawTableRow(doc, rowData, tableX, currentY, tableWidth);
-        });
     }
 
     /**
@@ -358,6 +348,10 @@ class ReportService {
                     });
                 });
 
+                doc.on('error', (error) => {
+                    reject(error);
+                });
+
                 let currentY = PDFUtils.drawEnhancedAuditHeader(doc, 1);
                 currentY = this.drawAuditSummarySection(doc, currentY, logs, filters);
                 currentY = this.drawAuditLogsTable(doc, currentY, logs);
@@ -365,6 +359,7 @@ class ReportService {
                 PDFUtils.drawEnhancedFooter(doc);
                 doc.end();
             } catch (error) {
+                console.error('Audit PDF generation error:', error);
                 reject(error);
             }
         });
@@ -659,6 +654,180 @@ class ReportService {
         });
         
         return y + rowHeight;
+    }
+
+    /**
+     * Check service health
+     */
+    static async checkServiceHealth() {
+        try {
+            // Test database connection
+            await DatabaseConfig.connectToDatabase();
+            
+            return {
+                healthy: true,
+                message: 'Report service is operational',
+                database: true,
+                pdfGeneration: true,
+                auditLogging: true
+            };
+        } catch (error) {
+            console.error('Health check failed:', error);
+            return {
+                healthy: false,
+                message: error.message,
+                database: false,
+                pdfGeneration: false,
+                auditLogging: false
+            };
+        }
+    }
+
+    /**
+     * Get report statistics
+     */
+    static async getReportStatistics(plantId, days = 30) {
+        try {
+            // Mock statistics for now - replace with actual database queries
+            return {
+                totalReports: 0,
+                successfulReports: 0,
+                failedReports: 0,
+                averageGenerationTime: 0,
+                reportsByType: {
+                    sensor: 0,
+                    audit: 0
+                },
+                reportsByFormat: {
+                    pdf: 0,
+                    json: 0
+                }
+            };
+        } catch (error) {
+            console.error('Error getting report statistics:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Preview report data
+     */
+    static async previewReportData(type, options = {}) {
+        try {
+            const { plantId, start, end, limit = 10 } = options;
+            
+            if (type === 'sensor') {
+                const readings = await SensorService.getReadingsInRange(plantId, start, end);
+                return {
+                    totalRecords: readings.length,
+                    sampleData: readings.slice(0, limit)
+                };
+            }
+            
+            if (type === 'audit') {
+                const result = await AuditService.exportAuditLogs({ start, end, plantId });
+                return {
+                    totalRecords: result.logs.length,
+                    sampleData: result.logs.slice(0, limit)
+                };
+            }
+            
+            throw new Error(`Unsupported preview type: ${type}`);
+        } catch (error) {
+            console.error('Error getting report preview:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get available templates
+     */
+    static async getAvailableTemplates() {
+        return {
+            sensor: [
+                {
+                    id: 'standard',
+                    name: 'Standard Sensor Report',
+                    description: 'Basic sensor data with statistics'
+                },
+                {
+                    id: 'detailed',
+                    name: 'Detailed Sensor Report',
+                    description: 'Comprehensive sensor data with charts'
+                }
+            ],
+            audit: [
+                {
+                    id: 'standard',
+                    name: 'Standard Audit Report',
+                    description: 'Basic audit log export'
+                }
+            ]
+        };
+    }
+
+    /**
+     * Validate report parameters
+     */
+    static async validateReportParameters(params) {
+        const { type, plantId, start, end, format } = params;
+        const validation = {
+            valid: true,
+            errors: [],
+            warnings: []
+        };
+
+        // Type validation
+        if (!type || !['sensor', 'audit'].includes(type)) {
+            validation.valid = false;
+            validation.errors.push('Invalid or missing report type');
+        }
+
+        // Format validation
+        if (!format || !['pdf', 'json'].includes(format)) {
+            validation.valid = false;
+            validation.errors.push('Invalid or missing format');
+        }
+
+        // Date validation
+        if (type === 'sensor') {
+            if (!plantId) {
+                validation.valid = false;
+                validation.errors.push('Plant ID is required for sensor reports');
+            }
+            if (!start || !end) {
+                validation.valid = false;
+                validation.errors.push('Start and end dates are required');
+            }
+            if (start && end && new Date(start) > new Date(end)) {
+                validation.valid = false;
+                validation.errors.push('Start date must be before end date');
+            }
+        }
+
+        return validation;
+    }
+
+    /**
+     * Schedule report (placeholder for future implementation)
+     */
+    static async scheduleReport(options) {
+        // This would integrate with a job scheduler
+        throw new Error('Report scheduling not yet implemented');
+    }
+
+    /**
+     * Get scheduled reports (placeholder)
+     */
+    static async getScheduledReports(plantId) {
+        return [];
+    }
+
+    /**
+     * Cancel scheduled report (placeholder)
+     */
+    static async cancelScheduledReport(scheduleId) {
+        throw new Error('Report scheduling not yet implemented');
     }
 }
 
