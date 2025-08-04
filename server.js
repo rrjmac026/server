@@ -1974,13 +1974,12 @@ function validateScheduleData(data) {
     if (!Array.isArray(data.calendarDays) || data.calendarDays.length === 0) {
       return 'At least one calendar day is required for fertilizing schedule';
     }
-    // Validate calendar days are between 1-31
-    if (data.calendarDays.some(day => day < 1 || day > 31)) {
-      return 'Calendar days must be between 1 and 31';
+    if (data.calendarDays.some(day => !Number.isInteger(day) || day < 1 || day > 31)) {
+      return 'Calendar days must be valid days between 1 and 31';
     }
   }
   
-  return null; // No validation errors
+  return null;
 }
 
 // Create a new schedule
@@ -1995,18 +1994,23 @@ app.post('/api/schedules', async (req, res) => {
     }
 
     const collection = await getCollection('schedules');
+    
+    // Transform schedule data based on type
     const scheduleData = {
       ...req.body,
       enabled: req.body.enabled ?? true,
       createdAt: moment().tz('Asia/Manila').toDate(),
-      updatedAt: moment().tz('Asia/Manila').toDate()
+      updatedAt: moment().tz('Asia/Manila').toDate(),
+      // For fertilizing schedules, set days to empty array and use calendarDays
+      days: req.body.type === 'fertilizing' ? [] : req.body.days,
+      calendarDays: req.body.type === 'fertilizing' ? req.body.calendarDays : null
     };
     
     const result = await collection.insertOne(scheduleData);
     const insertedSchedule = {
       ...scheduleData,
       _id: result.insertedId,
-      id: result.insertedId.toString() // Add id field for client compatibility
+      id: result.insertedId.toString()
     };
 
     // Create audit log entry
@@ -2027,7 +2031,7 @@ app.post('/api/schedules', async (req, res) => {
       schedule: insertedSchedule
     });
   } catch (error) {
-       console.error('❌ Error creating schedule:', error);
+    console.error('❌ Error creating schedule:', error);
     res.status(500).json({ 
       success: false, 
       error: 'Failed to create schedule',
