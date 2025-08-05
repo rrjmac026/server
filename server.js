@@ -1683,21 +1683,33 @@ function sanitizeAuditLog(log) {
 // ==========================
 
 // Helper function to validate schedule data
-// Helper function to validate schedule data
+// Update your validateScheduleData function in your server:
+
 function validateScheduleData(data) {
-  // If any of these fields are missing or null, return specific error
+  // Basic validation
   if (!data) return 'Schedule data is required';
   if (!data.plantId) return 'Plant ID is required';
-  if (!data.type || !['watering', 'fertilizing'].includes(data.type)) return 'Valid type (watering or fertilizing) is required';
-  if (!data.time || !/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/.test(data.time)) return 'Valid time in HH:MM format is required';
+  if (!data.type || !['watering', 'fertilizing'].includes(data.type)) {
+    return 'Valid type (watering or fertilizing) is required';
+  }
+  if (!data.time || !/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/.test(data.time)) {
+    return 'Valid time in HH:MM format is required';
+  }
   
-  // Different validation for different schedule types
+  // Type-specific validation
   if (data.type === 'watering') {
-    if (!Array.isArray(data.days) || data.days.length === 0) return 'At least one day of the week is required for watering schedule';
+    if (!Array.isArray(data.days) || data.days.length === 0) {
+      return 'At least one day of the week is required for watering schedule';
+    }
+    // Ensure calendarDays is empty for watering
+    data.calendarDays = [];
   }
   
   if (data.type === 'fertilizing') {
-    if (!Array.isArray(data.calendarDays) || data.calendarDays.length === 0) return 'At least one calendar day is required for fertilizing schedule';
+    if (!Array.isArray(data.calendarDays) || data.calendarDays.length === 0) {
+      return 'At least one calendar day is required for fertilizing schedule';
+    }
+    
     // Validate calendar days are numbers between 1-31
     for (const day of data.calendarDays) {
       const dayNum = parseInt(day);
@@ -1705,17 +1717,26 @@ function validateScheduleData(data) {
         return 'Calendar days must be numbers between 1 and 31';
       }
     }
+    // Ensure days is empty for fertilizing
+    data.days = [];
   }
   
-  if (typeof data.duration !== 'number' || data.duration < 1 || data.duration > 60) return 'Duration must be between 1 and 60 minutes';
+  if (typeof data.duration !== 'number' || data.duration < 1 || data.duration > 60) {
+    return 'Duration must be between 1 and 60 minutes';
+  }
   
   return null; // No validation errors
 }
-// Create a new schedule
+
+// Also update your POST /api/schedules endpoint to better handle the data:
+
 app.post('/api/schedules', async (req, res) => {
   try {
+    console.log('📥 Received schedule data:', JSON.stringify(req.body, null, 2));
+    
     const validationError = validateScheduleData(req.body);
     if (validationError) {
+      console.log('❌ Validation error:', validationError);
       return res.status(400).json({ 
         success: false, 
         error: validationError 
@@ -1730,11 +1751,13 @@ app.post('/api/schedules', async (req, res) => {
       updatedAt: moment().tz('Asia/Manila').toDate()
     };
     
+    console.log('💾 Saving schedule to database:', JSON.stringify(scheduleData, null, 2));
+    
     const result = await collection.insertOne(scheduleData);
     const insertedSchedule = {
       ...scheduleData,
       _id: result.insertedId,
-      id: result.insertedId.toString() // Add id field for client compatibility
+      id: result.insertedId.toString()
     };
 
     // Create audit log entry
@@ -1748,6 +1771,8 @@ app.post('/api/schedules', async (req, res) => {
       details: `Created ${scheduleData.type} schedule`,
       scheduleData: scheduleData
     });
+
+    console.log('✅ Schedule created successfully with ID:', result.insertedId.toString());
 
     res.status(201).json({ 
       success: true, 
