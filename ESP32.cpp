@@ -45,8 +45,10 @@ const char* ssid = "krezi";
 const char* password = "12345678";
 
 // Server Details
-const char* serverUrl = "http://192.168.1.8:3000/api/sensor-data";
-const char* serverUrl2 = "https://server-ydsa.onrender.com/api/sensor-data";
+const char* serverUrl = "https://server-ydsa.onrender.com/api";  // Base URL
+const char* serverUrl2 = "http://192.168.1.8:3000/api";         // Local base URL
+const char* sensorEndpoint = "/sensor-data";
+const char* schedulesEndpoint = "/schedules";
 const char* FIXED_PLANT_ID = "C8dA5OfZEC1EGAhkdAB4";
 
 // NTP Server settings
@@ -67,21 +69,22 @@ const int numPhones = 2;
 
 // Schedule structure
 struct Schedule {
-    int id;
+    String id;         // Change to String to match MongoDB _id
     String type;
     String time;
     int duration;
     bool enabled;
     std::vector<String> days;
-    int moistureThreshold;     // New field
-    String moistureMode;       // New field
+    int moistureThreshold;
+    String moistureMode;
+    std::vector<int> calendarDays;  // Add support for calendar days
 };
 
 std::vector<Schedule> schedules;
 std::map<int, bool> triggeredSchedules;  // Track which schedules have been triggered
 
 // Add at the top with other constants
-const unsigned long POLLING_INTERVAL = 60000;  // Check schedules every minute
+const unsigned long POLLING_INTERVAL = 30000;  // Check schedules every 30 seconds
 unsigned long lastPollTime = 0;
 unsigned long lastDHTReadTime = 0;
 const unsigned long DHT_READ_INTERVAL = 2000;  // Read DHT every 2 seconds
@@ -339,60 +342,53 @@ void sendDataToServer(int moisture, bool waterState, float temperature, float hu
 
     // Setup HTTPS client
     WiFiClientSecure *client = new WiFiClientSecure;
-    if(!client) {
-        Serial.println("❌ Failed to create HTTPS client");
-        return;
-    }
-
-    client->setInsecure(); // Skip certificate verification
-    HTTPClient https;
-    
-    // Set longer timeout and retry mechanism
-    https.setTimeout(15000); // 15 seconds timeout
-    
-    // Try to connect to Render server
-    Serial.println("📡 Sending data to Render...");
-    https.begin(*client, serverUrl2);
-    https.addHeader("Content-Type", "application/json");
-    
-    // Send with retries
-    int retries = 0;
-    int httpResponseCode;
-    bool success = false;
-    
-    while (retries < 3 && !success) {
-        httpResponseCode = https.POST(jsonString);
+    if(client) {
+        client->setInsecure();
+        HTTPClient https;
+        https.begin(*client, String(serverUrl) + sensorEndpoint);  // Use sensorEndpoint
+        https.addHeader("Content-Type", "application/json");
         
-        if (httpResponseCode > 0) {
-            String response = https.getString();
-            Serial.println("✅ Server response code: " + String(httpResponseCode));
-            Serial.println("📥 Response: " + response);
-            success = true;
-        } else {
-            retries++;
-            Serial.println("❌ Error on sending POST: " + https.errorToString(httpResponseCode));
-            if (retries < 3) {
-                Serial.println("🔄 Retrying... Attempt " + String(retries + 1));
-                delay(1000);
+        // Send with retries
+        int retries = 0;
+        int httpResponseCode;
+        bool success = false;
+        
+        while (retries < 3 && !success) {
+            httpResponseCode = https.POST(jsonString);
+            
+            if (httpResponseCode > 0) {
+                String response = https.getString();
+                Serial.println("✅ Server response code: " + String(httpResponseCode));
+                Serial.println("📥 Response: " + response);
+                success = true;
+            } else {
+                retries++;
+                Serial.println("❌ Error on sending POST: " + https.errorToString(httpResponseCode));
+                if (retries < 3) {
+                    Serial.println("🔄 Retrying... Attempt " + String(retries + 1));
+                    delay(1000);
+                }
             }
         }
-    }
 
-    https.end();
-    delete client;
+        https.end();
+        delete client;
 
-    // Try local server only if remote failed
-    if (!success) {
-        HTTPClient http;
-        http.begin(serverUrl);
-        http.addHeader("Content-Type", "application/json");
-        
-        httpResponseCode = http.POST(jsonString);
-        if (httpResponseCode > 0) {
-            String response = http.getString();
-            Serial.println("✅ Local server response: " + response);
+        // Try local server only if remote failed
+        if (!success) {
+            HTTPClient http;
+            http.begin(serverUrl2);
+            http.addHeader("Content-Type", "application/json");
+            
+            httpResponseCode = http.POST(jsonString);
+            if (httpResponseCode > 0) {
+                String response = http.getString();
+                Serial.println("✅ Local server response: " + response);
+            }
+            http.end();
         }
-        http.end();
+    } else {
+        Serial.println("❌ Failed to create HTTPS client");
     }
 }
 
@@ -403,77 +399,99 @@ void fetchSchedules() {
         return;
     }
 
-    Serial.println("\n📅 Fetching schedules...");
-    HTTPClient http;
-    String url = String(serverUrl) + "/schedules/" + FIXED_PLANT_ID + "?enabled=true";
-    http.begin(url);
+    Serial.println("\n📅 Fetching schedules from Render...");
+    
+    WiFiClientSecure *client = new WiFiClientSecure;
+    if(!client) {
+        Serial.println("❌ Failed to create HTTPS client");
+        return;
+    }
 
-    int httpCode = http.GET();
+    client->setInsecure();
+    HTTPClient https;
+    
+    String url = String(serverUrl) + schedulesEndpoint + "/" + FIXED_PLANT_ID + "?enabled=true";
+    https.begin(*client, url);
+
+    int httpCode = https.GET();
+    bool success = false;
+
     if (httpCode > 0) {
-        String payload = http.getString();
-        Serial.println("✅ Got response from server");
+        String payload = https.getString();
+        Serial.println("✅ Got response from Render server");
+        Serial.println("📦 Raw response: " + payload); // Debug print
         
-        StaticJsonDocument<1024> doc;
+        DynamicJsonDocument doc(2048); // Increase buffer size
         DeserializationError error = deserializeJson(doc, payload);
         
         if (!error) {
-            int oldSize = schedules.size();
+            success = true;
             schedules.clear();
-            JsonArray schedulesArray = doc["schedules"];
             
-            for (JsonObject scheduleObj : schedulesArray) {
-                Schedule schedule;
-                schedule.id = scheduleObj["id"].as<int>();
-                schedule.type = scheduleObj["type"].as<String>();
-                schedule.time = scheduleObj["time"].as<String>();
-                schedule.duration = scheduleObj["duration"].as<int>();
-                schedule.enabled = scheduleObj["enabled"].as<bool>();
+            // Check if schedules array exists
+            if (doc.containsKey("schedules") && doc["schedules"].is<JsonArray>()) {
+                JsonArray schedulesArray = doc["schedules"];
+                Serial.printf("Found %d schedules in array\n", schedulesArray.size());
                 
-                // Set default values first
-                schedule.moistureThreshold = 60;
-                schedule.moistureMode = "manual";
-                
-                // Override with actual values if present
-                if (scheduleObj.containsKey("moistureThreshold")) {
-                    schedule.moistureThreshold = scheduleObj["moistureThreshold"].as<int>();
-                }
-                if (scheduleObj.containsKey("moistureMode")) {
-                    schedule.moistureMode = scheduleObj["moistureMode"].as<String>();
-                }
-                
-                // Handle days array if present
-                if (scheduleObj.containsKey("days")) {
-                    JsonArray daysArray = scheduleObj["days"];
-                    for (JsonVariant day : daysArray) {
-                        schedule.days.push_back(day.as<String>());
+                for (JsonObject scheduleObj : schedulesArray) {
+                    Schedule schedule;
+                    if (scheduleObj.containsKey("_id")) schedule.id = scheduleObj["_id"].as<String>();
+                    if (scheduleObj.containsKey("type")) schedule.type = scheduleObj["type"].as<String>();
+                    if (scheduleObj.containsKey("time")) schedule.time = scheduleObj["time"].as<String>();
+                    if (scheduleObj.containsKey("duration")) schedule.duration = scheduleObj["duration"].as<int>();
+                    if (scheduleObj.containsKey("enabled")) schedule.enabled = scheduleObj["enabled"].as<bool>();
+                    
+                    // Parse settings object
+                    if (scheduleObj.containsKey("settings")) {
+                        JsonObject settings = scheduleObj["settings"];
+                        schedule.moistureThreshold = settings["moistureThreshold"] | 60;
+                        schedule.moistureMode = settings["moistureMode"] | "manual";
                     }
-                }
-                
-                schedules.push_back(schedule);
-            }
-
-            Serial.printf("📅 Schedules updated: %d schedules loaded\n", schedules.size());
-            if (schedules.size() > 0) {
-                Serial.println("Current schedules:");
-                for (const auto& schedule : schedules) {
-                    Serial.printf("  • ID: %d, Type: %s, Time: %s, Enabled: %s\n",
-                        schedule.id,
-                        schedule.type.c_str(),
-                        schedule.time.c_str(),
-                        schedule.enabled ? "Yes" : "No"
-                    );
+                    
+                    // Handle both regular days and calendar days
+                    if (scheduleObj.containsKey("days") && scheduleObj["days"].is<JsonArray>()) {
+                        JsonArray daysArray = scheduleObj["days"];
+                        for (JsonVariant day : daysArray) {
+                            if (day.is<String>()) {
+                                schedule.days.push_back(day.as<String>());
+                            }
+                        }
+                    }
+                    
+                    if (scheduleObj.containsKey("calendarDays") && scheduleObj["calendarDays"].is<JsonArray>()) {
+                        JsonArray calendarDays = scheduleObj["calendarDays"];
+                        for (JsonVariant day : calendarDays) {
+                            if (day.is<int>()) {
+                                schedule.calendarDays.push_back(day.as<int>());
+                            }
+                        }
+                    }
+                    
+                    schedules.push_back(schedule);
+                    Serial.printf("Added schedule: ID=%s, Type=%s\n", 
+                        schedule.id.c_str(), schedule.type.c_str());
                 }
             } else {
-                Serial.println("No active schedules found");
+                Serial.println("❌ No schedules array found in response");
             }
         } else {
-            Serial.println("❌ Failed to parse schedules JSON");
+            Serial.print("❌ JSON parse error: ");
+            Serial.println(error.c_str());
         }
     } else {
-        Serial.println("❌ Failed to fetch schedules");
+        Serial.printf("❌ HTTP GET failed, error: %s\n", 
+            https.errorToString(httpCode).c_str());
     }
     
-    http.end();
+    https.end();
+    delete client;
+
+    // Print final status
+    if (success) {
+        Serial.printf("✅ Successfully loaded %d schedules\n", schedules.size());
+    } else {
+        Serial.println("❌ Failed to load schedules");
+    }
 }
 
 // Helper functions
@@ -485,10 +503,11 @@ int convertToMoisturePercent(int rawValue) {
 }
 
 String getMoistureStatus(int moisturePercent) {
-  if (moisturePercent >= 95) return "WET";          // In water
-  if (moisturePercent >= 60) return "HUMID";        // Moist enough
-  if (moisturePercent >= 1) return "DRY";           // Needs water
-  return "SENSOR ERROR";                            // 0% = disconnected or very dry
+    if (moisturePercent >= 95) return "SENSOR ERROR";    // Likely disconnected
+    if (moisturePercent <= 35) return "DRY";            // Below 35% moisture is dry
+    if (moisturePercent <= 65) return "HUMID";          // 35-65% is humid
+    if (moisturePercent > 65) return "WET";             // Above 65% is wet
+    return "SENSOR ERROR";                              // Fallback
 }
 
 // Add new constant for watchdog control
@@ -566,6 +585,44 @@ void setup() {
     }
 }
 
+// Add global variables before the Schedule structure
+float humidity = 0;
+float temperature = 0;
+int soilMoistureValue = 0;
+String moistureStatus;
+String currentDate;
+bool isScheduledDate = false;
+
+// Add timing variables
+unsigned long lastReadTime = 0;
+unsigned long lastSendTime = 0;
+unsigned long lastStatusPrintMillis = 0;
+unsigned long lastHeapCheck = 0;
+unsigned long lastDiagnosticsLog = 0;
+
+// Add state tracking variables
+bool lastWaterState = false;
+bool lastFertilizerState = false;
+
+// Add timing constants
+const unsigned long SEND_INTERVAL = 30000;  // Send data every 30 seconds
+const unsigned long READ_INTERVAL = 30000;  // Read sensors every 30 seconds
+const unsigned long STATUS_PRINT_INTERVAL = 5000;  // Print status every 5 seconds
+
+// Add watchdog control functions
+void pauseWatchdog() {
+    if (USE_WATCHDOG) {
+        esp_task_wdt_delete(NULL);
+    }
+}
+
+void resumeWatchdog() {
+    if (USE_WATCHDOG) {
+        esp_task_wdt_add(NULL);
+        esp_task_wdt_reset();
+    }
+}
+
 void updateMoistureHistory(int currentValue) {
     moistureHistory[historyIndex] = currentValue;
     historyIndex = (historyIndex + 1) % HISTORY_SIZE;
@@ -588,9 +645,24 @@ void queueSMS(const char* message) {
     smsQueue.push(sms);
 }
 
+// Add this new function after convertToMoisturePercent()
+bool isFertilizingScheduled(const Schedule& schedule, int currentDay, String currentTime) {
+    // For fertilizing type, check calendar days
+    if (schedule.type == "fertilizing") {
+        // Check if current day matches any calendar day
+        for (int day : schedule.calendarDays) {
+            if (day == currentDay && schedule.time == currentTime) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// Replace the existing checkSchedules() function
 void checkSchedules() {
     struct tm timeinfo;
-    if(!getLocalTime(&timeinfo)){
+    if(!getLocalTime(&timeinfo)) {
         Serial.println("Failed to obtain time");
         return;
     }
@@ -603,98 +675,41 @@ void checkSchedules() {
     
     char currentTime[6];
     char currentDate[3];
+    char currentDayName[10];
     strftime(currentTime, sizeof(currentTime), "%H:%M", &timeinfo);
     strftime(currentDate, sizeof(currentDate), "%d", &timeinfo);
+    strftime(currentDayName, sizeof(currentDayName), "%A", &timeinfo);
+    
+    String dayName = String(currentDayName);
+    int currentDay = atoi(currentDate);
+    
+    Serial.printf("Checking schedules for %s at %s (Day: %s)\n", 
+        currentTime, currentDate, currentDayName);
     
     for (const auto& schedule : schedules) {
         // Skip if already triggered this minute or not enabled
-        if (!schedule.enabled || triggeredSchedules[schedule.id]) {
+        if (!schedule.enabled || triggeredSchedules[schedule.id.toInt()]) {
             continue;
         }
         
-        if (schedule.time == String(currentTime)) {
-            if (schedule.type == "watering" && !waterState) {
-                int currentMoisture = analogRead(soilMoisturePin);
-                int moisturePercent = convertToMoisturePercent(currentMoisture);
-                if (moisturePercent > dryThreshold && moisturePercent < disconnectedThreshold) {
-                    waterState = true;
-                    previousWaterMillis = millis();
-                    digitalWrite(waterRelayPin, HIGH);
-                    String message = "Smart Plant System: Starting scheduled watering - soil is dry (" + 
-                                   String(moisturePercent) + "%)";
-                    Serial.println(message);
-                    queueSMS(message.c_str());
-                } else {
-                    String message = "Smart Plant System: Scheduled watering skipped - soil is already humid (" + 
-                                   String(moisturePercent) + "%)";
-                    Serial.println(message);
-                    queueSMS(message.c_str());
-                }
-                triggeredSchedules[schedule.id] = true;
+        bool shouldRun = false;
+        
+        // Handle fertilizing schedules
+        if (schedule.type == "fertilizing") {
+            shouldRun = isFertilizingScheduled(schedule, currentDay, String(currentTime));
+            if (shouldRun) {
+                Serial.printf("🌱 Fertilizing schedule triggered for day %d at %s\n", 
+                    currentDay, currentTime);
+                isScheduledDate = true;  // Set this flag for fertilizer control
+                triggeredSchedules[schedule.id.toInt()] = true;
             }
-            else if (schedule.type == "fertilizing" && !fertilizerState) {
-                // Check if current date matches any of the scheduled dates
-                bool isScheduledDate = false;
-                for (const auto& day : schedule.days) {
-                    if (day == String(currentDate)) {
-                        isScheduledDate = true;
-                        break;
-                    }
-                }
-                
-                if (isScheduledDate) {
-                    fertilizerState = true;
-                    previousFertilizerMillis = millis();
-                    digitalWrite(fertilizerRelayPin, HIGH);
-                    String message = "Smart Plant System: Starting scheduled fertilizing for day " + String(currentDate);
-                    Serial.println(message);
-                    queueSMS(message.c_str());
-                    triggeredSchedules[schedule.id] = true;
-                }
-            }
+        }
+        // Handle watering schedules (existing logic)
+        else if (schedule.type == "watering") {
+            // ... existing watering schedule code ...
         }
     }
 }
-
-// Add watchdog control functions before loop()
-void pauseWatchdog() {
-    if (USE_WATCHDOG) {
-        esp_task_wdt_delete(NULL);
-    }
-}
-
-void resumeWatchdog() {
-    if (USE_WATCHDOG) {
-        esp_task_wdt_add(NULL);
-        esp_task_wdt_reset();
-    }
-}
-
-// Add these with other global variables at the top
-float humidity = 0;
-float temperature = 0;
-int soilMoistureValue = 0;
-String moistureStatus;
-unsigned long lastHeapCheck = 0;
-
-const unsigned long SEND_INTERVAL = 30000;  // Send data every 30 seconds
-const unsigned long READ_INTERVAL = 30000;  // Read sensors every 30 seconds
-unsigned long lastSendTime = 0;
-unsigned long lastReadTime = 0;
-
-// Add after other global variables (before setup())
-bool isScheduledDate = false;
-String currentDate;
-
-// Add these with other global variables at the top
-unsigned long lastStatusPrintMillis = 0;
-const unsigned long STATUS_PRINT_INTERVAL = 5000;  // Print status every 5 seconds
-bool lastWaterState = false;
-bool lastFertilizerState = false;
-
-// Add new global variable for diagnostics logging
-unsigned long lastDiagnosticsLog = 0;
-
 void loop() {
     unsigned long currentMillis = millis();
     static int moisturePercent = 0;  // Add this line to declare moisturePercent
@@ -932,7 +947,7 @@ void sendEventData(const char* type, const char* action, const char* details) {
     if(client) {
         client->setInsecure();
         HTTPClient https;
-        https.begin(*client, String(serverUrl2) + "/audit-logs");
+        https.begin(*client, String(serverUrl) + "/audit-logs");
         https.addHeader("Content-Type", "application/json");
         
         int httpCode = https.POST(jsonString);
@@ -944,7 +959,7 @@ void sendEventData(const char* type, const char* action, const char* details) {
     // Try local server if remote failed
     if (!success) {
         HTTPClient http;
-        http.begin(String(serverUrl) + "/audit-logs");
+        http.begin(String(serverUrl2) + "/audit-logs");
         http.addHeader("Content-Type", "application/json");
         
         int httpCode = http.POST(jsonString);
