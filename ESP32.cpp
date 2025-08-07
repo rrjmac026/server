@@ -716,16 +716,30 @@ void checkSchedules() {
                 previousWaterMillis = millis();
                 digitalWrite(waterRelayPin, HIGH);
                 
-                String details = "Scheduled watering started";
+                // Convert schedule duration from minutes to milliseconds
+                unsigned long waterDuration = schedule.duration * 60000;
+                
+                String details = "Scheduled watering started for " + String(schedule.duration) + " minutes";
                 sendEventData("watering", "started", details.c_str());
                 
-                Serial.println("💧 Scheduled watering started");
-                String smsMessage = "Smart Plant System: Started scheduled watering";
+                Serial.println("💧 Scheduled watering started for " + String(schedule.duration) + " minutes");
+                String smsMessage = "Smart Plant System: Started scheduled watering for " + String(schedule.duration) + " minutes";
                 queueSMS(smsMessage.c_str());
             }
             else if (schedule.type == "fertilizing") {
-                // Existing fertilizing code
-                isScheduledDate = true;
+                fertilizerState = true;
+                previousFertilizerMillis = millis();
+                digitalWrite(fertilizerRelayPin, HIGH);
+                
+                // Convert schedule duration from minutes to milliseconds
+                unsigned long fertilizerDuration = schedule.duration * 60000;
+                
+                String details = "Scheduled fertilizing started for " + String(schedule.duration) + " minutes";
+                sendEventData("fertilizer", "started", details.c_str());
+                
+                Serial.println("🌱 Scheduled fertilizing started for " + String(schedule.duration) + " minutes");
+                String smsMessage = "Smart Plant System: Started scheduled fertilizing for " + String(schedule.duration) + " minutes";
+                queueSMS(smsMessage.c_str());
             }
         }
     }
@@ -780,51 +794,20 @@ void loop() {
         Serial.print("% → Status: ");
         Serial.println(moistureStatus);
         
-        lastReadTime = currentMillis;
-    }
-
-    // Send data every 30 seconds
-    if (currentMillis - lastSendTime >= SEND_INTERVAL) {
-        sendDataToServer(soilMoistureValue, waterState, temperature, humidity);
-        lastSendTime = currentMillis;
-    }
-
-    resumeWatchdog();
-
-    // Replace the direct status prints with this new code block
-    if (currentMillis - lastStatusPrintMillis >= STATUS_PRINT_INTERVAL || 
-        lastWaterState != waterState || 
-        lastFertilizerState != fertilizerState) {
-            
-        Serial.println("\n=== System Status ===");
-        Serial.println("💧 Water Pump Status: " + String(waterState ? "ON" : "OFF"));
-        Serial.println("🌱 Fertilizer Status: " + String(fertilizerState ? "ON" : "OFF"));
-        Serial.println("====================\n");
-        
-        lastStatusPrintMillis = currentMillis;
-        lastWaterState = waterState;
-        lastFertilizerState = fertilizerState;
-    }
-
-    // Enhanced water pump control logic with detailed reasoning
-    if (waterState) {
-        String reason;
-        String additionalInfo;
-
-        // Find applicable watering schedule
-        Schedule* activeSchedule = nullptr;
-        for (auto& s : schedules) {
+        // Get current watering duration from schedule
+        unsigned long waterDuration = 30000; // Default 30 seconds
+        for (const auto& s : schedules) {
             if (s.type == "watering" && s.enabled) {
-                activeSchedule = &s;
+                waterDuration = s.duration * 60000; // Convert minutes to milliseconds
                 break;
             }
         }
+        
+        Serial.println("Duration: " + String((currentMillis - previousWaterMillis) / 1000) + "s / " + 
+                      String(waterDuration / 1000) + "s");
+        Serial.println("===========================");
 
-        // Use schedule duration or default to 30 seconds if no schedule found
-        unsigned long waterDuration = (activeSchedule) ? 
-            (activeSchedule->duration * 60000) : // Convert minutes to milliseconds
-            30000; // Default 30 seconds
-
+        // Update water duration based on active schedule
         if (currentMillis - previousWaterMillis >= waterDuration || 
             moisturePercent <= dryThreshold || 
             moisturePercent >= disconnectedThreshold) {
@@ -893,21 +876,16 @@ void loop() {
         Serial.println("\n🌱 Fertilizer Status: ON");
         Serial.println("Reason: " + fertReason);
         
-        // Find applicable fertilizing schedule
-        Schedule* activeFertSchedule = nullptr;
-        for (auto& s : schedules) {
+        // Update fertilizer duration based on active schedule
+        unsigned long fertilizerDuration = 50000; // Default 50 seconds
+        for (const auto& s : schedules) {
             if (s.type == "fertilizing" && s.enabled) {
-                activeFertSchedule = &s;
+                fertilizerDuration = s.duration * 60000; // Convert minutes to milliseconds
                 break;
             }
         }
-
-        // Use schedule duration or default to 50 seconds
-        unsigned long fertDuration = (activeFertSchedule) ?
-            (activeFertSchedule->duration * 60000) : // Convert minutes to milliseconds
-            50000; // Default 50 seconds
-
-        if (currentMillis - previousFertilizerMillis >= fertDuration) {
+        
+        if (currentMillis - previousFertilizerMillis >= fertilizerDuration) {
             fertilizerState = false;
             digitalWrite(fertilizerRelayPin, LOW);
             
