@@ -25,12 +25,10 @@ const int humidThreshold = 35;    // 35% dryness threshold
 const int disconnectedThreshold = 95;  // 95% indicates likely disconnected
 
 unsigned long previousWaterMillis = 0;
-const unsigned long waterOnDuration = 30000;  // 30 seconds
 bool waterState = false;
 
 // Fertilizer timing
 unsigned long previousFertilizerMillis = 0;
-const unsigned long fertilizerOnDuration = 50000;  // 50 seconds
 const unsigned long fertilizerOffDuration = 30000; // 30 seconds
 bool fertilizerState = false;
 
@@ -605,8 +603,8 @@ bool lastWaterState = false;
 bool lastFertilizerState = false;
 
 // Add timing constants
-const unsigned long SEND_INTERVAL = 30000;  // Send data every 30 seconds
-const unsigned long READ_INTERVAL = 30000;  // Read sensors every 30 seconds
+const unsigned long SEND_INTERVAL = 25000;  // Send data every 30 seconds
+const unsigned long READ_INTERVAL = 25000;  // Read sensors every 30 seconds
 const unsigned long STATUS_PRINT_INTERVAL = 5000;  // Print status every 5 seconds
 
 // Add watchdog control functions
@@ -674,17 +672,14 @@ void checkSchedules() {
     }
     
     char currentTime[6];
-    char currentDate[3];
     char currentDayName[10];
     strftime(currentTime, sizeof(currentTime), "%H:%M", &timeinfo);
-    strftime(currentDate, sizeof(currentDate), "%d", &timeinfo);
     strftime(currentDayName, sizeof(currentDayName), "%A", &timeinfo);
     
     String dayName = String(currentDayName);
-    int currentDay = atoi(currentDate);
+    String timeStr = String(currentTime);
     
-    Serial.printf("Checking schedules for %s at %s (Day: %s)\n", 
-        currentTime, currentDate, currentDayName);
+    Serial.printf("Checking schedules at %s (%s)\n", currentTime, currentDayName);
     
     for (const auto& schedule : schedules) {
         // Skip if already triggered this minute or not enabled
@@ -694,25 +689,51 @@ void checkSchedules() {
         
         bool shouldRun = false;
         
-        // Handle fertilizing schedules
         if (schedule.type == "fertilizing") {
-            shouldRun = isFertilizingScheduled(schedule, currentDay, String(currentTime));
-            if (shouldRun) {
-                Serial.printf("🌱 Fertilizing schedule triggered for day %d at %s\n", 
-                    currentDay, currentTime);
-                isScheduledDate = true;  // Set this flag for fertilizer control
-                triggeredSchedules[schedule.id.toInt()] = true;
+            // Handle fertilizing schedules (existing code)
+            shouldRun = isFertilizingScheduled(schedule, timeinfo.tm_mday, timeStr);
+        }
+        else if (schedule.type == "watering") {
+            // Handle watering schedules
+            if (schedule.time == timeStr) {
+                // Check if current day matches any scheduled days
+                for (const String& day : schedule.days) {
+                    if (day.equalsIgnoreCase(dayName)) {
+                        shouldRun = true;
+                        Serial.printf("💧 Watering schedule triggered for %s at %s\n", 
+                            day.c_str(), timeStr.c_str());
+                        break;
+                    }
+                }
             }
         }
-        // Handle watering schedules (existing logic)
-        else if (schedule.type == "watering") {
-            // ... existing watering schedule code ...
+
+        if (shouldRun) {
+            triggeredSchedules[schedule.id.toInt()] = true;
+            
+            if (schedule.type == "watering") {
+                waterState = true;
+                previousWaterMillis = millis();
+                digitalWrite(waterRelayPin, HIGH);
+                
+                String details = "Scheduled watering started";
+                sendEventData("watering", "started", details.c_str());
+                
+                Serial.println("💧 Scheduled watering started");
+                String smsMessage = "Smart Plant System: Started scheduled watering";
+                queueSMS(smsMessage.c_str());
+            }
+            else if (schedule.type == "fertilizing") {
+                // Existing fertilizing code
+                isScheduledDate = true;
+            }
         }
     }
 }
 void loop() {
     unsigned long currentMillis = millis();
-    static int moisturePercent = 0;  // Add this line to declare moisturePercent
+    static int moisturePercent = 0;
+    static int currentThreshold = humidThreshold; // Add default threshold
     
     // Get current date at the start of loop
     struct tm timeinfo;
@@ -785,39 +806,52 @@ void loop() {
         lastFertilizerState = fertilizerState;
     }
 
-    // Enhanced water pump control logic
+    // Enhanced water pump control logic with detailed reasoning
     if (waterState) {
-        Serial.println("💧 Water Pump Status: ON");  // Add this line
-        if (currentMillis - previousWaterMillis >= waterOnDuration || 
-            moisturePercent <= dryThreshold || moisturePercent >= disconnectedThreshold) {
+        String reason;
+        String additionalInfo;
+
+        // Find applicable watering schedule
+        Schedule* activeSchedule = nullptr;
+        for (auto& s : schedules) {
+            if (s.type == "watering" && s.enabled) {
+                activeSchedule = &s;
+                break;
+            }
+        }
+
+        // Use schedule duration or default to 30 seconds if no schedule found
+        unsigned long waterDuration = (activeSchedule) ? 
+            (activeSchedule->duration * 60000) : // Convert minutes to milliseconds
+            30000; // Default 30 seconds
+
+        if (currentMillis - previousWaterMillis >= waterDuration || 
+            moisturePercent <= dryThreshold || 
+            moisturePercent >= disconnectedThreshold) {
+            
             waterState = false;
             digitalWrite(waterRelayPin, LOW);
             
-            String reason;
+            String stopReason;
             if (moisturePercent >= disconnectedThreshold) {
-                reason = "Sensor disconnected or not in soil";
-                sendEventData("watering", "stopped", reason.c_str());
+                stopReason = "⚠️ ALERT: Sensor might be disconnected or not in soil";
             } else if (moisturePercent <= dryThreshold) {
-                reason = "Target moisture level reached";
-                sendEventData("watering", "completed", reason.c_str());
+                stopReason = "✅ Target moisture level achieved";
             } else {
-                reason = "Duration completed";
-                sendEventData("watering", "completed", reason.c_str());
+                stopReason = "⏱️ Scheduled duration completed";
             }
             
-            String message;
-            if (moisturePercent >= disconnectedThreshold) {
-                message = "Smart Plant System: Watering stopped. Reason: Sensor disconnected or not in soil.";
-            } else if (moisturePercent <= dryThreshold) {
-                message = "Smart Plant System: Watering stopped. Soil is now humid/wet.";
-            } else {
-                message = "Smart Plant System: Watering cycle completed.";
-            }
-            Serial.println("Water pump OFF: " + moistureStatus);
-            queueSMS(message.c_str());
+            Serial.println("\n=== 💧 Water Pump Stopped ===");
+            Serial.println("Reason: " + stopReason);
+            Serial.println("Final Moisture: " + String(moisturePercent) + "%");
+            Serial.println("Total Duration: " + String((currentMillis - previousWaterMillis) / 1000) + " seconds");
+            Serial.println("==========================");
+
+            sendEventData("watering", "stopped", stopReason.c_str());
+            queueSMS(("Smart Plant System: Watering stopped. " + stopReason).c_str());
         }
     } else {
-        Serial.println("💧 Water Pump Status: OFF");  // Add this line
+        Serial.println("\n💧 Water Pump Status: OFF");
         // Find applicable watering schedule
         Schedule* activeSchedule = nullptr;
         for (auto& schedule : schedules) {
@@ -847,10 +881,33 @@ void loop() {
         }
     }
 
-    // Fertilizer timing control
+    // Enhanced fertilizer timing control
     if (fertilizerState) {
-        Serial.println("🌱 Fertilizer Status: ON");  // Add this line
-        if (currentMillis - previousFertilizerMillis >= fertilizerOnDuration) {
+        String fertReason;
+        if (isScheduledDate) {
+            fertReason = "Calendar-based schedule for day " + String(currentDate);
+        } else {
+            fertReason = "Manual activation";
+        }
+        
+        Serial.println("\n🌱 Fertilizer Status: ON");
+        Serial.println("Reason: " + fertReason);
+        
+        // Find applicable fertilizing schedule
+        Schedule* activeFertSchedule = nullptr;
+        for (auto& s : schedules) {
+            if (s.type == "fertilizing" && s.enabled) {
+                activeFertSchedule = &s;
+                break;
+            }
+        }
+
+        // Use schedule duration or default to 50 seconds
+        unsigned long fertDuration = (activeFertSchedule) ?
+            (activeFertSchedule->duration * 60000) : // Convert minutes to milliseconds
+            50000; // Default 50 seconds
+
+        if (currentMillis - previousFertilizerMillis >= fertDuration) {
             fertilizerState = false;
             digitalWrite(fertilizerRelayPin, LOW);
             
@@ -861,7 +918,7 @@ void loop() {
             queueSMS(completionMsg.c_str());
         }
     } else {
-        Serial.println("🌱 Fertilizer Status: OFF");  // Add this line
+        Serial.println("\n🌱 Fertilizer Status: OFF");
         // In checkSchedules() when starting fertilizer
         if (isScheduledDate) {
             fertilizerState = true;
