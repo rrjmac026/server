@@ -808,22 +808,11 @@ void loop() {
         Serial.println("===========================");
 
         // Update water duration based on active schedule
-        if (currentMillis - previousWaterMillis >= waterDuration || 
-            moisturePercent <= dryThreshold || 
-            moisturePercent >= disconnectedThreshold) {
-            
+        if (currentMillis - previousWaterMillis >= waterDuration) {
             waterState = false;
             digitalWrite(waterRelayPin, LOW);
             
-            String stopReason;
-            if (moisturePercent >= disconnectedThreshold) {
-                stopReason = "⚠️ ALERT: Sensor might be disconnected or not in soil";
-            } else if (moisturePercent <= dryThreshold) {
-                stopReason = "✅ Target moisture level achieved";
-            } else {
-                stopReason = "⏱️ Scheduled duration completed";
-            }
-            
+            String stopReason = "⏱️ Scheduled duration completed";
             Serial.println("\n=== 💧 Water Pump Stopped ===");
             Serial.println("Reason: " + stopReason);
             Serial.println("Final Moisture: " + String(moisturePercent) + "%");
@@ -835,32 +824,35 @@ void loop() {
         }
     } else {
         Serial.println("\n💧 Water Pump Status: OFF");
-        // Find applicable watering schedule
-        Schedule* activeSchedule = nullptr;
-        for (auto& schedule : schedules) {
-            if (schedule.type == "watering" && schedule.enabled) {
-                activeSchedule = &schedule;
-                break;
+        // Only start watering if we're not already watering
+        if (!waterState) {
+            // Find applicable watering schedule
+            Schedule* activeSchedule = nullptr;
+            for (auto& schedule : schedules) {
+                if (schedule.type == "watering" && schedule.enabled) {
+                    activeSchedule = &schedule;
+                    break;
+                }
             }
-        }
 
-        // Get threshold from schedule or use default
-        int currentThreshold = (activeSchedule) ? activeSchedule->moistureThreshold : 60;
-        bool isAutoMode = (activeSchedule) ? (activeSchedule->moistureMode == "auto") : false;
+            // Get threshold from schedule or use default
+            int currentThreshold = (activeSchedule) ? activeSchedule->moistureThreshold : 60;
+            bool isAutoMode = (activeSchedule) ? (activeSchedule->moistureMode == "auto") : false;
 
-        // Only start automatic watering if in auto mode and soil is dry
-        if (isAutoMode && moisturePercent > currentThreshold && moisturePercent < disconnectedThreshold) {
-            waterState = true;
-            previousWaterMillis = currentMillis;
-            digitalWrite(waterRelayPin, HIGH);
-            
-            String details = "Moisture: " + String(moisturePercent) + "% (Threshold: " + String(currentThreshold) + "%)";
-            sendEventData("watering", "started", details.c_str());
-            
-            Serial.println("Water pump ON: " + moistureStatus);
-            String smsMessage = "Smart Plant System: Started watering. Soil is dry (" + 
-                              String(moisturePercent) + "%, Threshold: " + String(currentThreshold) + "%)";
-            queueSMS(smsMessage.c_str());
+            // Only start automatic watering if in auto mode and soil is dry
+            if (isAutoMode && moisturePercent > currentThreshold && moisturePercent < disconnectedThreshold) {
+                waterState = true;
+                previousWaterMillis = currentMillis;
+                digitalWrite(waterRelayPin, HIGH);
+                
+                String details = "Moisture: " + String(moisturePercent) + "% (Threshold: " + String(currentThreshold) + "%)";
+                sendEventData("watering", "started", details.c_str());
+                
+                Serial.println("Water pump ON: " + moistureStatus);
+                String smsMessage = "Smart Plant System: Started watering. Soil is dry (" + 
+                                  String(moisturePercent) + "%, Threshold: " + String(currentThreshold) + "%)";
+                queueSMS(smsMessage.c_str());
+            }
         }
     }
 
