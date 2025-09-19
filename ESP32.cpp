@@ -39,8 +39,8 @@ int historyIndex = 0;
 bool rapidDrying = false;
 
 // Network credentials
-const char* ssid = "krezi";
-const char* password = "12345678";
+const char* ssid = "GlobeAtHome_efd40_2.4";
+const char* password = "pzlblst'8090";
 
 // Server Details
 const char* serverUrl = "https://server-ydsa.onrender.com/api";  // Base URL
@@ -772,6 +772,9 @@ void loop() {
         // Read DHT sensor
         humidity = dht.readHumidity();
         temperature = dht.readTemperature();
+
+        sendDataToServer(soilMoistureValue, waterState, temperature, humidity);
+        lastReadTime = currentMillis;
         
         // Read soil moisture and convert to percentage
         soilMoistureValue = analogRead(soilMoisturePin);
