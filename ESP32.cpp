@@ -769,6 +769,10 @@ void loop() {
     
     // Read sensors every 30 seconds
     if (currentMillis - lastReadTime >= READ_INTERVAL) {
+
+        soilMoistureValue = analogRead(soilMoisturePin);
+        moisturePercent = convertToMoisturePercent(soilMoistureValue);
+
         // Read DHT sensor
         humidity = dht.readHumidity();
         temperature = dht.readTemperature();
@@ -776,9 +780,7 @@ void loop() {
         sendDataToServer(soilMoistureValue, waterState, temperature, humidity);
         lastReadTime = currentMillis;
         
-        // Read soil moisture and convert to percentage
-        soilMoistureValue = analogRead(soilMoisturePin);
-        moisturePercent = convertToMoisturePercent(soilMoistureValue);
+        
 
         updateMoistureHistory(moisturePercent);
         rapidDrying = detectRapidDrying();
