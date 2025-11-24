@@ -41,12 +41,12 @@ async function createAdmins() {
       { 
         email: 'admin@admin.com', 
         username: 'admin', 
-        password: 'Admin@123456' 
+        password: 'password' 
       },
       { 
         email: '1901102366@student.buksu.edu.ph', 
         username: 'Rey Rameses Jude III S. Macalutas', 
-        password: 'Password@123456' 
+        password: 'password' 
       }
     ];
 

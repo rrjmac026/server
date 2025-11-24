@@ -145,7 +145,7 @@ router.post('/auth/login', async (req, res) => {
 // Google authentication
 router.post('/auth/google', async (req, res) => {
   try {
-    const { email, displayName, photoUrl } = req.body;
+    const { email, displayName, photoUrl, idToken, accessToken } = req.body;
 
     if (!email) {
       return res.status(400).json({ 
@@ -159,12 +159,12 @@ router.post('/auth/google', async (req, res) => {
     let user = await usersCollection.findOne({ email });
 
     if (!user) {
-      // Create new user from Google login
+      // Create new user from Google login (always starts as 'user' role)
       const result = await usersCollection.insertOne({
         email,
         username: displayName || email.split('@')[0],
         password: null,
-        role: 'user',
+        role: 'user', // Default role for new users
         photoUrl,
         createdAt: new Date(),
         isActive: true,
@@ -186,7 +186,7 @@ router.post('/auth/google', async (req, res) => {
       );
     }
 
-    // Create JWT token
+    // Create JWT token with role
     const token = jwt.sign(
       { 
         id: user._id, 
