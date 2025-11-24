@@ -6,7 +6,6 @@ const { connectToDatabase } = require('./config/database');
 const middleware = require('./middleware');
 
 // Import routes
-const authRoutes = require('./routes/auth.routes');
 const sensorRoutes = require('./routes/sensor.routes');
 const reportRoutes = require('./routes/report.routes');
 const auditRoutes = require('./routes/audit.routes');
@@ -28,7 +27,6 @@ app.get("/api/health", (req, res) => {
 });
 
 // API routes
-app.use('/api', authRoutes);
 app.use('/api', sensorRoutes);
 app.use('/api', reportRoutes);
 app.use('/api', auditRoutes);
