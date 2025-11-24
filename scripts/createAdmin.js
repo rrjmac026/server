@@ -19,20 +19,46 @@ async function createAdmins() {
     await client.connect();
     console.log('✅ Connected to MongoDB');
 
+    // Test connection
+    await client.db('admin').command({ ping: 1 });
+    console.log('✅ MongoDB ping successful');
+
     const db = client.db(dbName);
+    
+    // Ensure collection exists with indexes
     const usersCollection = db.collection('users');
+    
+    // Create unique index on email
+    try {
+      await usersCollection.createIndex({ email: 1 }, { unique: true });
+      console.log('✅ Email unique index created');
+    } catch (err) {
+      console.log('ℹ️ Email index already exists');
+    }
 
     // Multiple admin accounts
     const adminAccounts = [
-      { email: 'admin@admin.com', username: 'admin', password: 'password' },
-      { email: '1901102366@student.buksu.edu.ph', username: 'Rey Rameses Jude III S. Macalutas', password: 'password' }
+      { 
+        email: 'admin@admin.com', 
+        username: 'admin', 
+        password: 'Admin@123456' 
+      },
+      { 
+        email: '1901102366@student.buksu.edu.ph', 
+        username: 'Rey Rameses Jude III S. Macalutas', 
+        password: 'Password@123456' 
+      }
     ];
+
+    let createdCount = 0;
+    let skippedCount = 0;
 
     for (const admin of adminAccounts) {
       // Check if admin already exists
       const existingAdmin = await usersCollection.findOne({ email: admin.email });
       if (existingAdmin) {
-        console.log(`⚠️ Admin already exists: ${admin.email}`);
+        console.log(`⚠️  Admin already exists: ${admin.email}`);
+        skippedCount++;
         continue;
       }
 
@@ -46,6 +72,7 @@ async function createAdmins() {
         password: hashedPassword,
         role: 'admin',
         createdAt: moment().tz('Asia/Manila').toDate(),
+        updatedAt: moment().tz('Asia/Manila').toDate(),
         isActive: true,
         lastLogin: null,
         photoUrl: null,
@@ -53,16 +80,27 @@ async function createAdmins() {
       });
 
       console.log(`✅ Admin created: ${admin.email} (ID: ${result.insertedId})`);
+      createdCount++;
     }
 
     console.log('\n📋 Admin Accounts Summary:');
+    console.log('================================');
     adminAccounts.forEach(a => {
-      console.log('Email:', a.email, '| Username:', a.username, '| Password:', a.password);
+      console.log(`📧 Email:    ${a.email}`);
+      console.log(`👤 Username: ${a.username}`);
+      console.log(`🔑 Password: ${a.password}`);
+      console.log('--------------------------------');
     });
-    console.log('⚠️ Please change passwords after first login!');
+    console.log(`\n✅ Created: ${createdCount} | ⏭️  Skipped: ${skippedCount}`);
+    console.log('⚠️  Please change passwords after first login!');
+
+    // Verify insertion
+    const allUsers = await usersCollection.countDocuments();
+    console.log(`\n📊 Total users in database: ${allUsers}`);
 
   } catch (error) {
     console.error('❌ Error creating admin users:', error.message);
+    console.error('Error details:', error);
     process.exit(1);
   } finally {
     await client.close();
