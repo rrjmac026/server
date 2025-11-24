@@ -29,8 +29,8 @@ app.get("/api/health", (req, res) => {
 // ✅ Mount Routes
 app.use('/', sensorRoutes);
 app.use('/', auditRoutes);
-app.use('/', reportRoutes);
-app.use('/', scheduleRoutes);
+// app.use('/', reportRoutes);
+// app.use('/', scheduleRoutes);
 
 // ✅ Error handling
 app.use((err, req, res, next) => {
