@@ -3,6 +3,8 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { getCollection } = require('../config/database');
 const { authenticateToken } = require('../middleware/auth.middleware');
+const { OAuth2Client } = require('google-auth-library');
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const router = express.Router();
 
@@ -147,25 +149,43 @@ router.post('/auth/google', async (req, res) => {
   try {
     const { email, displayName, photoUrl, idToken, accessToken } = req.body;
 
-    if (!email) {
+    if (!idToken) {
       return res.status(400).json({ 
         success: false, 
-        error: 'Email is required' 
+        error: 'ID token is required' 
       });
     }
 
+    // Verify the Google ID token
+    let ticket;
+    try {
+      ticket = await client.verifyIdToken({
+        idToken: idToken,
+        audience: process.env.GOOGLE_CLIENT_ID,
+      });
+    } catch (error) {
+      console.error('Token verification failed:', error);
+      return res.status(401).json({ 
+        success: false, 
+        error: 'Invalid Google token' 
+      });
+    }
+
+    const payload = ticket.getPayload();
+    const verifiedEmail = payload.email;
+
     const usersCollection = await getCollection('users');
     
-    let user = await usersCollection.findOne({ email });
+    let user = await usersCollection.findOne({ email: verifiedEmail });
 
     if (!user) {
-      // Create new user from Google login (always starts as 'user' role)
+      // Create new user from Google login
       const result = await usersCollection.insertOne({
-        email,
-        username: displayName || email.split('@')[0],
+        email: verifiedEmail,
+        username: payload.name || verifiedEmail.split('@')[0],
         password: null,
-        role: 'user', // Default role for new users
-        photoUrl,
+        role: 'user',
+        photoUrl: payload.picture,
         createdAt: new Date(),
         isActive: true,
         lastLogin: new Date(),
@@ -174,8 +194,8 @@ router.post('/auth/google', async (req, res) => {
 
       user = {
         _id: result.insertedId,
-        email,
-        username: displayName || email.split('@')[0],
+        email: verifiedEmail,
+        username: payload.name || verifiedEmail.split('@')[0],
         role: 'user',
       };
     } else {
@@ -186,7 +206,7 @@ router.post('/auth/google', async (req, res) => {
       );
     }
 
-    // Create JWT token with role
+    // Create JWT token
     const token = jwt.sign(
       { 
         id: user._id, 
