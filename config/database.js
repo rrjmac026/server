@@ -16,12 +16,13 @@ async function connectToDatabase() {
     }
     
     db = client.db(process.env.MONGODB_DB_NAME || 'plantmonitoringdb');
+    console.log('✅ Connected to MongoDB');
     return db;
 }
 
 const getCollection = async (collection) => {
-    const db = await connectToDatabase();
-    return db.collection(collection);
+    const database = await connectToDatabase();
+    return database.collection(collection);
 };
 
 module.exports = { connectToDatabase, getCollection };
