@@ -28,9 +28,9 @@ async function createSchedule(scheduleData) {
   });
 
   return {
-    success: true,
-    id: result.insertedId.toString(),
-    schedule: { ...data, _id: result.insertedId, id: result.insertedId.toString() }
+    _id: result.insertedId,
+    ...data,
+    id: result.insertedId.toString() // Add string id for compatibility
   };
 }
 

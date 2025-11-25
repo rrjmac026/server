@@ -13,7 +13,13 @@ async function createSchedule(req, res) {
     }
 
     const result = await scheduleService.createSchedule(req.body);
-    res.status(201).json(result);
+    
+    // Return the created schedule with proper format
+    res.status(201).json({
+      success: true,
+      schedule: result, // Make sure to return the schedule object
+      message: 'Schedule created successfully'
+    });
   } catch (error) {
     console.error('Error creating schedule:', error);
     res.status(500).json({
