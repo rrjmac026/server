@@ -303,8 +303,8 @@ function drawEnhancedTableHeader(doc, headers, colWidths, x, y, width) {
 }
 
 function drawEnhancedTableRow(doc, log, colWidths, x, y, width, index) {
-  // Fixed timestamp format: Added space between date and time
-  const formattedTimestamp = moment(log.timestamp).format('MMM DD\nHH:mm');
+  // Updated timestamp format to include seconds
+  const formattedTimestamp = moment(log.timestamp).format('MMM DD\nHH:mm:ss');
   
   const detailsText = log.details || '-';
   const sensorDataText = log.sensorData ? formatEnhancedSensorData(log.sensorData) : '-';

@@ -227,11 +227,12 @@ async function exportAuditLogs(req, res) {
     return;
   }
 
+  // JSON format - include seconds in timestamp
   res.json({
     success: true,
     logs: logs.map(log => ({
       ...log,
-      timestamp: moment(log.timestamp).tz('Asia/Manila').format()
+      timestamp: moment(log.timestamp).tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss') // Added seconds
     }))
   });
 }
