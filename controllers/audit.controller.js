@@ -14,10 +14,22 @@ exports.createAuditLog = async (req, res) => {
     }
 
     const result = await auditService.createAuditLog(data);
+    
+    // If duplicate, still return 201 but indicate it was skipped
+    if (result.isDuplicate) {
+      return res.status(200).json({ 
+        success: true,
+        message: result.message,
+        isDuplicate: true,
+        id: null
+      });
+    }
+    
     res.status(201).json({ 
       success: true,
       id: result.insertedId,
-      data: result.data 
+      data: result.data,
+      isDuplicate: false
     });
   } catch (error) {
     console.error("Error creating audit log:", error);

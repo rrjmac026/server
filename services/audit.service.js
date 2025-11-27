@@ -2,6 +2,31 @@ const moment = require('moment-timezone');
 const PDFDocument = require('pdfkit');
 const { getCollection } = require('../config/database');
 const pdfUtils = require('../utils/pdf.utils');
+const crypto = require('crypto');
+
+// Add deduplication configuration
+const DEDUP_WINDOW_MS = 5000; // 5 seconds - prevent duplicates within this window
+
+function generateIdempotencyKey(data) {
+  const keyData = `${data.plantId}-${data.type}-${data.action}-${data.status || 'success'}`;
+  return crypto.createHash('md5').update(keyData).digest('hex');
+}
+
+async function isDuplicate(data) {
+  const collection = await getCollection('audit_logs');
+  const idempotencyKey = generateIdempotencyKey(data);
+  const timeWindow = new Date(Date.now() - DEDUP_WINDOW_MS);
+  
+  const existingLog = await collection.findOne({
+    plantId: data.plantId,
+    type: data.type,
+    action: data.action,
+    status: data.status || 'success',
+    timestamp: { $gte: timeWindow }
+  });
+  
+  return !!existingLog;
+}
 
 function sanitizeAuditLog(log) {
   return {
@@ -17,6 +42,17 @@ function sanitizeAuditLog(log) {
 
 async function createAuditLog(data) {
   const collection = await getCollection('audit_logs');
+  
+  // Check for duplicate before creating
+  if (await isDuplicate(data)) {
+    return {
+      insertedId: null,
+      data: null,
+      isDuplicate: true,
+      message: 'Duplicate audit log detected and skipped'
+    };
+  }
+  
   const logData = sanitizeAuditLog({
     ...data,
     timestamp: moment().tz('Asia/Manila').toDate()
@@ -26,7 +62,8 @@ async function createAuditLog(data) {
   
   return {
     insertedId: result.insertedId,
-    data: logData
+    data: logData,
+    isDuplicate: false
   };
 }
 
