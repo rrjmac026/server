@@ -314,7 +314,7 @@ function drawEnhancedTableRow(doc, log, colWidths, x, y, width, index) {
   doc.rect(x, y, 4, rowHeight).fillColor(statusColor).fill();
   
   const cellData = [
-    moment(log.timestamp).format('MMM DD\nHH:mm'),
+    moment(log.timestamp).format('MMM DD\nHH:mm:ss'),
     (log.type || '-').toUpperCase(),
     (log.action || '-').toUpperCase(),
     log.status || '-',
