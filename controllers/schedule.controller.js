@@ -17,7 +17,7 @@ async function createSchedule(req, res) {
     // Return the created schedule with proper format
     res.status(201).json({
       success: true,
-      schedule: result, // Make sure to return the schedule object
+      schedule: result,
       message: 'Schedule created successfully'
     });
   } catch (error) {

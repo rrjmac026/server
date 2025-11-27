@@ -30,7 +30,7 @@ async function createSchedule(scheduleData) {
   return {
     _id: result.insertedId,
     ...data,
-    id: result.insertedId.toString() // Add string id for compatibility
+    id: result.insertedId.toString()
   };
 }
 
