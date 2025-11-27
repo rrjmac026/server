@@ -304,7 +304,12 @@ function drawEnhancedTableRow(doc, log, colWidths, x, y, width, index) {
   const baseRowHeight = 45;
   const detailsText = log.details || '-';
   const sensorDataText = log.sensorData ? formatEnhancedSensorData(log.sensorData) : '-';
-  const rowHeight = Math.max(baseRowHeight, 60);
+  
+  const detailsHeight = estimateTextHeight(detailsText, colWidths[4] - 20, doc, 8);
+  const dataHeight = estimateTextHeight(sensorDataText, colWidths[5] - 20, doc, 8);
+  const timestampHeight = estimateTextHeight(moment(log.timestamp).format('MMM: DD\nHH:mm:ss'), colWidths[0] - 20, doc, 9);
+  
+  const rowHeight = Math.max(baseRowHeight, detailsHeight + 15, dataHeight + 15, timestampHeight + 15);
   
   const bgColor = index % 2 === 0 ? '#ffffff' : '#f8f9fa';
   doc.rect(x, y, width, rowHeight).fillColor(bgColor).fill();
@@ -329,17 +334,56 @@ function drawEnhancedTableRow(doc, log, colWidths, x, y, width, index) {
     }
     
     if (i === 3 && text !== '-') {
-      drawStatusBadge(doc, currentX + 8, y + 12, text, statusColor);
+      drawStatusBadge(doc, currentX + 8, y + (rowHeight / 2) - 9, text, statusColor);
     } else {
       const fontSize = i === 0 ? 9 : (i === 4 || i === 5 ? 8 : 10);
       const fontWeight = (i === 1 || i === 2) ? 'Helvetica-Bold' : 'Helvetica';
       doc.fillColor('#333333').font(fontWeight).fontSize(fontSize)
-         .text(text, currentX + 8, y + 10, { width: colWidths[i] - 16, align: 'left', lineBreak: true, height: rowHeight - 20 });
+         .text(text, currentX + 8, y + 8, { width: colWidths[i] - 16, align: 'left', lineBreak: true, height: rowHeight - 16 });
     }
     currentX += colWidths[i];
   });
   
   return y + rowHeight;
+}
+
+function estimateTextHeight(text, maxWidth, doc, fontSize = 8) {
+  const lineHeight = fontSize * 1.5;
+  if (!text || text === '-') return lineHeight;
+  
+  const lines = text.split('\n');
+  let totalLines = 0;
+  
+  lines.forEach(line => {
+    if (!line.trim()) {
+      totalLines += 1;
+      return;
+    }
+    
+    const words = line.split(' ');
+    let currentLine = '';
+    let lineCount = 1;
+    
+    words.forEach(word => {
+      const testLine = currentLine + (currentLine ? ' ' : '') + word;
+      const width = doc.widthOfString(testLine, { fontSize });
+      
+      if (width > maxWidth) {
+        if (currentLine) {
+          lineCount++;
+          currentLine = word;
+        } else {
+          currentLine = word;
+        }
+      } else {
+        currentLine = testLine;
+      }
+    });
+    
+    totalLines += lineCount;
+  });
+  
+  return totalLines * lineHeight;
 }
 
 function drawStatusBadge(doc, x, y, status, color) {
