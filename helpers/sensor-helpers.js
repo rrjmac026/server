@@ -1,6 +1,15 @@
 const moment = require('moment-timezone');
 const { getCollection } = require('../config/database');
 
+// Deduplication configuration
+const DEDUP_WINDOW_MS = 10000; // 10 seconds
+const PERIODIC_STORE_MS = 300000; // 5 minutes
+const SIGNIFICANT_CHANGE_THRESHOLDS = {
+  moisture: 5,
+  temperature: 0.5,
+  humidity: 3
+};
+
 function getMoistureStatus(moisture) {
   if (!moisture || moisture === null) return "NO DATA";
   if (moisture === 1023) return "SENSOR ERROR";
@@ -17,7 +26,68 @@ function isSensorDataStale(timestamp) {
   return now.diff(readingTime, 'seconds') > 40;
 }
 
+async function shouldStoreSensorData(data) {
+  const collection = await getCollection('sensor_data');
+  const lastReading = await collection.findOne(
+    { plantId: data.plantId },
+    { sort: { timestamp: -1 } }
+  );
+  
+  if (!lastReading) {
+    return { store: true, reason: 'first_reading', skipAudit: false };
+  }
+  
+  const timeSinceLastReading = Date.now() - new Date(lastReading.timestamp).getTime();
+  
+  if (timeSinceLastReading > PERIODIC_STORE_MS) {
+    return { store: true, reason: 'periodic_update', skipAudit: false };
+  }
+  
+  if (timeSinceLastReading < DEDUP_WINDOW_MS &&
+      data.moisture === lastReading.moisture &&
+      data.temperature === lastReading.temperature &&
+      data.humidity === lastReading.humidity &&
+      Boolean(data.waterState) === Boolean(lastReading.waterState) &&
+      Boolean(data.fertilizerState) === Boolean(lastReading.fertilizerState)) {
+    return { store: false, reason: 'duplicate_within_window', skipAudit: true };
+  }
+  
+  const moistureChange = Math.abs(data.moisture - lastReading.moisture);
+  const tempChange = Math.abs(data.temperature - lastReading.temperature);
+  const humidityChange = Math.abs(data.humidity - lastReading.humidity);
+  const stateChanged = Boolean(data.waterState) !== Boolean(lastReading.waterState) ||
+                       Boolean(data.fertilizerState) !== Boolean(lastReading.fertilizerState);
+  
+  const hasSignificantChange = 
+    moistureChange >= SIGNIFICANT_CHANGE_THRESHOLDS.moisture ||
+    tempChange >= SIGNIFICANT_CHANGE_THRESHOLDS.temperature ||
+    humidityChange >= SIGNIFICANT_CHANGE_THRESHOLDS.humidity ||
+    stateChanged;
+  
+  if (hasSignificantChange) {
+    return { 
+      store: true, 
+      reason: 'significant_change',
+      skipAudit: false,
+      changes: { moistureChange, tempChange, humidityChange, stateChanged }
+    };
+  }
+  
+  return { store: false, reason: 'no_significant_change', skipAudit: true };
+}
+
 async function saveSensorData(data) {
+    const shouldStore = await shouldStoreSensorData(data);
+    
+    if (!shouldStore.store) {
+        console.log(`⚠️ Skipping sensor data for ${data.plantId}: ${shouldStore.reason}`);
+        return { 
+            insertedId: null, 
+            isDuplicate: true,
+            reason: shouldStore.reason
+        };
+    }
+    
     const collection = await getCollection('sensor_data');
     const result = await collection.insertOne({
         ...data,
@@ -26,26 +96,32 @@ async function saveSensorData(data) {
         timestamp: moment().tz('Asia/Manila').toDate()
     });
 
-    const auditCollection = await getCollection('audit_logs');
-    await auditCollection.insertOne({
-        plantId: data.plantId,
-        type: 'sensor',
-        action: 'read',
-        status: 'success',
-        timestamp: moment().tz('Asia/Manila').toDate(),
-        details: 'Sensor reading recorded',
-        sensorData: {
-            moisture: data.moisture,
-            temperature: data.temperature,
-            humidity: data.humidity,
-            moistureStatus: data.moistureStatus,
-            waterState: Boolean(data.waterState),
-            fertilizerState: Boolean(data.fertilizerState),
-            isConnected: data.isConnected
-        }
-    });
+    if (!shouldStore.skipAudit) {
+        const auditCollection = await getCollection('audit_logs');
+        await auditCollection.insertOne({
+            plantId: data.plantId,
+            type: 'sensor',
+            action: 'read',
+            status: 'success',
+            timestamp: moment().tz('Asia/Manila').toDate(),
+            details: `Sensor reading recorded (${shouldStore.reason})`,
+            sensorData: {
+                moisture: data.moisture,
+                temperature: data.temperature,
+                humidity: data.humidity,
+                moistureStatus: data.moistureStatus,
+                waterState: Boolean(data.waterState),
+                fertilizerState: Boolean(data.fertilizerState),
+                isConnected: data.isConnected
+            }
+        });
+    }
 
-    return result;
+    return { 
+        insertedId: result.insertedId, 
+        isDuplicate: false,
+        reason: shouldStore.reason
+    };
 }
 
 async function getLatestReading(plantId) {
@@ -131,5 +207,9 @@ module.exports = {
   getLatestReading,
   getReadingsInRange,
   getAllReadingsInRange,
-  calculateStats
+  calculateStats,
+  shouldStoreSensorData,
+  DEDUP_WINDOW_MS,
+  PERIODIC_STORE_MS,
+  SIGNIFICANT_CHANGE_THRESHOLDS
 };

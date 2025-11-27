@@ -10,10 +10,32 @@ exports.createSensorData = async (req, res) => {
     }
 
     const result = await sensorService.saveSensorData(data);
-    res.status(201).json({ message: "Sensor data saved", id: result.insertedId });
+    
+    // Handle duplicate/skipped data
+    if (result.isDuplicate) {
+      return res.status(200).json({ 
+        success: true,
+        message: result.message || "Sensor data skipped (no significant change)",
+        isDuplicate: true,
+        reason: result.reason,
+        id: null
+      });
+    }
+    
+    // Handle successful storage
+    res.status(201).json({ 
+      success: true,
+      message: "Sensor data saved",
+      id: result.insertedId,
+      reason: result.reason,
+      isDuplicate: false
+    });
   } catch (error) {
     console.error("❌ Error saving sensor data:", error.message);
-    res.status(500).json({ error: "Failed to save sensor data" });
+    res.status(500).json({ 
+      success: false,
+      error: "Failed to save sensor data" 
+    });
   }
 };
 
