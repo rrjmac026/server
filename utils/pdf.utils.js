@@ -50,14 +50,15 @@ function generateReportPDF(doc, plantId, start, end, readings) {
       currentY = drawTableHeader(doc, headers, tableX, currentY, tableWidth);
     }
     
+    // ✅ FIX: Use waterState and fertilizerState boolean values
     const rowData = [
       moment(reading.timestamp).format('MM-DD HH:mm'),
       `${reading.temperature || 'N/A'}°C`,
       `${reading.humidity || 'N/A'}%`,
       `${reading.moisture || 'N/A'}%`,
       reading.moistureStatus || 'N/A',
-      reading.wateringStatus || '-',
-      reading.fertilizerStatus || '-'
+      reading.waterState ? 'ON' : 'OFF',           // ✅ Changed from wateringStatus
+      reading.fertilizerState ? 'ON' : 'OFF'       // ✅ Changed from fertilizerStatus
     ];
     
     currentY = drawTableRow(doc, rowData, tableX, currentY, tableWidth);
@@ -303,13 +304,11 @@ function drawEnhancedTableHeader(doc, headers, colWidths, x, y, width) {
 }
 
 function drawEnhancedTableRow(doc, log, colWidths, x, y, width, index) {
-  // Updated timestamp format to include seconds
   const formattedTimestamp = moment(log.timestamp).format('MMM DD\nHH:mm:ss');
   
   const detailsText = log.details || '-';
   const sensorDataText = log.sensorData ? formatEnhancedSensorData(log.sensorData) : '-';
   
-  // Calculate dynamic row height based on content
   const detailsHeight = estimateTextHeight(doc, detailsText, colWidths[4] - 16, 8);
   const dataHeight = estimateTextHeight(doc, sensorDataText, colWidths[5] - 16, 8);
   const rowHeight = Math.max(50, detailsHeight + 25, dataHeight + 25);
