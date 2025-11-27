@@ -129,6 +129,7 @@ function drawEnhancedFooter(doc) {
            40, footerY + 25, { width: pageWidth - 80, align: 'center' });
 }
 
+
 function drawAuditSummarySection(doc, startY, logs, plantId, start, end, type) {
   const sectionWidth = doc.page.width - 80;
   const sectionX = 40;
@@ -144,16 +145,30 @@ function drawAuditSummarySection(doc, startY, logs, plantId, start, end, type) {
   const cardHeight = 80;
   const cardWidth = (sectionWidth - 30) / 3;
   
+  // Card 1: Total Logs
   drawSummaryCard(doc, sectionX, currentY, cardWidth, cardHeight, 
     'Total Logs', logs.length.toString(), '#4CAF50', 'LOGS');
   
+  // Card 2: Date Range
   const dateRange = start && end ? 
     `${moment(start).format('MMM DD')} - ${moment(end).format('MMM DD, YYYY')}` : 
     'All Time';
   drawSummaryCard(doc, sectionX + cardWidth + 15, currentY, cardWidth, cardHeight,
     'Date Range', dateRange, '#2196F3', 'DATE');
   
-  const filterInfo = plantId ? `Plant ${plantId}` : (type ? type.toUpperCase() : 'All Types');
+  // Card 3: Filter - IMPROVED handling of long Plant IDs
+  let filterInfo;
+  if (plantId) {
+    // If Plant ID is too long, truncate intelligently
+    if (plantId.length > 20) {
+      filterInfo = `Plant\n${plantId}`;  // Add line break for long IDs
+    } else {
+      filterInfo = `Plant ${plantId}`;
+    }
+  } else {
+    filterInfo = type ? type.toUpperCase() : 'All Types';
+  }
+  
   drawSummaryCard(doc, sectionX + (cardWidth + 15) * 2, currentY, cardWidth, cardHeight,
     'Filter', filterInfo, '#FF9800', 'FILTER');
   
@@ -167,12 +182,14 @@ function drawAuditSummarySection(doc, startY, logs, plantId, start, end, type) {
 }
 
 function drawSummaryCard(doc, x, y, width, height, title, value, color, icon) {
+  // Shadow effect
   doc.rect(x + 2, y + 2, width, height)
      .fillColor('#000000')
      .fillOpacity(0.1)
      .fill()
      .fillOpacity(1);
   
+  // Card background
   doc.rect(x, y, width, height)
      .fillColor('#ffffff')
      .fill()
@@ -180,10 +197,12 @@ function drawSummaryCard(doc, x, y, width, height, title, value, color, icon) {
      .lineWidth(1)
      .stroke();
   
+  // Top color bar
   doc.rect(x, y, width, 4)
      .fillColor(color)
      .fill();
   
+  // Icon circle
   const iconSize = 30;
   const iconX = x + 15;
   const iconY = y + 15;
@@ -194,22 +213,33 @@ function drawSummaryCard(doc, x, y, width, height, title, value, color, icon) {
      .fill()
      .fillOpacity(1);
   
+  // Icon text
   doc.fontSize(9)
      .fillColor(color)
      .font('Helvetica-Bold')
      .text(icon, iconX + 5, iconY + 12);
   
-  doc.fontSize(10)
+  // Title (LOGS, DATE, FILTER)
+  doc.fontSize(9)  // Reduced from 10
      .fillColor('#666666')
      .font('Helvetica')
      .text(title.toUpperCase(), iconX + iconSize + 10, iconY + 5);
   
-  doc.fontSize(16)
+  // Value - THIS IS THE FIX for long Plant IDs
+  const valueX = iconX + iconSize + 10;
+  const valueY = iconY + 20;
+  const valueWidth = width - iconSize - 40;
+  const valueHeight = height - iconY - 25;
+  
+  doc.fontSize(12)  // Reduced from 16 to 12
      .fillColor('#333333')
      .font('Helvetica-Bold')
-     .text(value, iconX + iconSize + 10, iconY + 20, {
-       width: width - iconSize - 40,
-       lineBreak: false
+     .text(value, valueX, valueY, {
+       width: valueWidth,
+       height: valueHeight,
+       align: 'left',
+       lineBreak: true,     // Enable line breaking for long text
+       ellipsis: false      // Don't truncate, wrap instead
      });
 }
 
