@@ -4,30 +4,81 @@ const { getCollection } = require('../config/database');
 const pdfUtils = require('../utils/pdf.utils');
 const crypto = require('crypto');
 
-// Add deduplication configuration
-const DEDUP_WINDOW_MS = 5000; // 5 seconds - prevent duplicates within this window
+// Import deduplication config
+const dedupConfig = require('../config/deduplication.config');
 
-function generateIdempotencyKey(data) {
-  const keyData = `${data.plantId}-${data.type}-${data.action}-${data.status || 'success'}`;
+const DEDUP_WINDOW_MS = dedupConfig.audit.dedupWindowMs;
+const ALWAYS_STORE_TYPES = dedupConfig.audit.alwaysStore;
+
+/**
+ * Generate a unique fingerprint for an audit log entry
+ * Used to detect exact duplicates
+ */
+function generateAuditFingerprint(data) {
+  const fingerprint = {
+    plantId: data.plantId,
+    type: String(data.type || '').toLowerCase(),
+    action: String(data.action || '').toLowerCase(),
+    status: String(data.status || 'success').toLowerCase()
+  };
+  
+  // Include sensor data values in fingerprint if present
+  if (data.sensorData) {
+    fingerprint.sensorData = {
+      moisture: data.sensorData.moisture,
+      temperature: data.sensorData.temperature,
+      humidity: data.sensorData.humidity,
+      waterState: Boolean(data.sensorData.waterState),
+      fertilizerState: Boolean(data.sensorData.fertilizerState)
+    };
+  }
+  
+  const keyData = JSON.stringify(fingerprint);
   return crypto.createHash('md5').update(keyData).digest('hex');
 }
 
-async function isDuplicate(data) {
+/**
+ * Check if an audit log is a duplicate within the deduplication window
+ */
+async function isDuplicateAuditLog(data) {
+  // Check if this type should always be stored (no deduplication)
+  const logType = String(data.type || '').toLowerCase();
+  const actionKey = `${logType}-${String(data.action || '').toLowerCase()}`;
+  
+  if (ALWAYS_STORE_TYPES.includes(logType) || ALWAYS_STORE_TYPES.includes(actionKey)) {
+    return false;
+  }
+  
   const collection = await getCollection('audit_logs');
-  const idempotencyKey = generateIdempotencyKey(data);
+  const fingerprint = generateAuditFingerprint(data);
   const timeWindow = new Date(Date.now() - DEDUP_WINDOW_MS);
   
-  const existingLog = await collection.findOne({
+  // Build query to find potential duplicates
+  const query = {
     plantId: data.plantId,
-    type: data.type,
-    action: data.action,
-    status: data.status || 'success',
+    type: String(data.type || '').toLowerCase(),
+    action: String(data.action || '').toLowerCase(),
+    status: String(data.status || 'success').toLowerCase(),
     timestamp: { $gte: timeWindow }
-  });
+  };
   
-  return !!existingLog;
+  // Find recent logs matching the criteria
+  const recentLogs = await collection.find(query).limit(10).toArray();
+  
+  // Check if any have the same fingerprint
+  for (const log of recentLogs) {
+    const logFingerprint = generateAuditFingerprint(log);
+    if (logFingerprint === fingerprint) {
+      return true;
+    }
+  }
+  
+  return false;
 }
 
+/**
+ * Sanitize and normalize audit log data
+ */
 function sanitizeAuditLog(log) {
   return {
     ...log,
@@ -40,11 +91,25 @@ function sanitizeAuditLog(log) {
   };
 }
 
+/**
+ * Create an audit log entry with deduplication
+ */
 async function createAuditLog(data) {
   const collection = await getCollection('audit_logs');
   
   // Check for duplicate before creating
-  if (await isDuplicate(data)) {
+  const isDuplicate = await isDuplicateAuditLog(data);
+  
+  if (isDuplicate) {
+    if (dedupConfig.logging.logDuplicates) {
+      console.log(`⚠️  Duplicate audit log detected and skipped:`, {
+        plantId: data.plantId,
+        type: data.type,
+        action: data.action,
+        status: data.status
+      });
+    }
+    
     return {
       insertedId: null,
       data: null,
@@ -60,6 +125,15 @@ async function createAuditLog(data) {
 
   const result = await collection.insertOne(logData);
   
+  if (dedupConfig.logging.logReason) {
+    console.log(`✅ Audit log created:`, {
+      id: result.insertedId,
+      plantId: logData.plantId,
+      type: logData.type,
+      action: logData.action
+    });
+  }
+  
   return {
     insertedId: result.insertedId,
     data: logData,
@@ -67,6 +141,9 @@ async function createAuditLog(data) {
   };
 }
 
+/**
+ * Get audit logs with filtering and pagination
+ */
 async function getAuditLogs(queryParams) {
   const collection = await getCollection('audit_logs');
   const { 
@@ -110,6 +187,9 @@ async function getAuditLogs(queryParams) {
   };
 }
 
+/**
+ * Export audit logs as PDF or JSON
+ */
 async function exportAuditLogs(req, res) {
   const { start, end, type, plantId, format = 'pdf' } = req.query;
 
@@ -156,16 +236,65 @@ async function exportAuditLogs(req, res) {
   });
 }
 
+/**
+ * Get distinct audit log types
+ */
 async function getAuditLogTypes() {
   const collection = await getCollection('audit_logs');
   const types = await collection.distinct('type');
   return types.filter(t => t).map(t => String(t).toLowerCase());
 }
 
+/**
+ * Get distinct audit log actions
+ */
 async function getAuditLogActions() {
   const collection = await getCollection('audit_logs');
   const actions = await collection.distinct('action');
   return actions.filter(a => a).map(a => String(a).toLowerCase());
+}
+
+/**
+ * Utility function to manually clean up duplicate audit logs
+ * Can be run as a maintenance task
+ */
+async function cleanupDuplicateAuditLogs() {
+  const collection = await getCollection('audit_logs');
+  
+  // Find all logs sorted by timestamp
+  const allLogs = await collection.find({})
+    .sort({ timestamp: 1 })
+    .toArray();
+  
+  const seen = new Map();
+  const duplicateIds = [];
+  
+  for (const log of allLogs) {
+    const fingerprint = generateAuditFingerprint(log);
+    const lastSeen = seen.get(fingerprint);
+    
+    if (lastSeen) {
+      const timeDiff = new Date(log.timestamp) - new Date(lastSeen.timestamp);
+      if (timeDiff < DEDUP_WINDOW_MS) {
+        duplicateIds.push(log._id);
+      } else {
+        seen.set(fingerprint, log);
+      }
+    } else {
+      seen.set(fingerprint, log);
+    }
+  }
+  
+  if (duplicateIds.length > 0) {
+    const result = await collection.deleteMany({
+      _id: { $in: duplicateIds }
+    });
+    console.log(`🧹 Cleaned up ${result.deletedCount} duplicate audit logs`);
+    return result.deletedCount;
+  }
+  
+  console.log('✨ No duplicate audit logs found');
+  return 0;
 }
 
 module.exports = {
@@ -173,5 +302,8 @@ module.exports = {
   getAuditLogs,
   exportAuditLogs,
   getAuditLogTypes,
-  getAuditLogActions
+  getAuditLogActions,
+  cleanupDuplicateAuditLogs,
+  isDuplicateAuditLog,
+  generateAuditFingerprint
 };
