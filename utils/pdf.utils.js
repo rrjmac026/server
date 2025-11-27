@@ -332,11 +332,14 @@ function drawEnhancedTableRow(doc, log, colWidths, x, y, width, index) {
   let currentX = x;
   cellData.forEach((text, i) => {
     if (i > 0) {
-      doc.moveTo(currentX, y).lineTo(currentX, y + rowHeight).strokeColor('#e9ecef').lineWidth(0.5).stroke();
+      doc.moveTo(currentX, y).lineTo(currentX, y + rowHeight)
+         .strokeColor('#e9ecef').lineWidth(0.5).stroke();
     }
     
     if (i === 3 && text !== '-') {
-      drawStatusBadge(doc, currentX + 8, y + 12, text, statusColor);
+      // Status column - center the badge vertically and pass maxWidth
+      const badgeY = y + (rowHeight / 2) - 7;
+      drawStatusBadge(doc, currentX, badgeY, text, statusColor, colWidths[i]);
     } else {
       const fontSize = i === 0 ? 9 : (i === 4 || i === 5 ? 8 : 10);
       const fontWeight = (i === 1 || i === 2) ? 'Helvetica-Bold' : 'Helvetica';
@@ -358,12 +361,18 @@ function drawEnhancedTableRow(doc, log, colWidths, x, y, width, index) {
   return y + rowHeight;
 }
 
-function drawStatusBadge(doc, x, y, status, color) {
-  const badgeWidth = 60, badgeHeight = 18;
-  doc.rect(x, y, badgeWidth, badgeHeight).fillColor(color).fillOpacity(0.1).fill()
-     .strokeColor(color).strokeOpacity(0.3).lineWidth(1).stroke().fillOpacity(1).strokeOpacity(1);
-  doc.fillColor(color).font('Helvetica-Bold').fontSize(9)
-     .text(status.toUpperCase(), x, y + 5, { width: badgeWidth, align: 'center' });
+function drawStatusBadge(doc, x, y, status, color, maxWidth) {
+  // Simple colored text without badge background - cleaner and no overlap
+  const padding = 6;
+  doc.fillColor(color)
+     .font('Helvetica-Bold')
+     .fontSize(8)
+     .text(status.toUpperCase(), x + padding, y, {
+       width: maxWidth - padding * 2,
+       align: 'center',
+       lineBreak: false,
+       ellipsis: true
+     });
 }
 
 function getStatusColor(status) {

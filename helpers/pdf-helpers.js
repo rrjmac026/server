@@ -372,31 +372,24 @@ function drawEnhancedTableHeader(doc, headers, colWidths, x, y, width) {
 }
 
 function drawEnhancedTableRow(doc, log, colWidths, x, y, width, index) {
-  const baseRowHeight = 45;
+  const formattedTimestamp = moment(log.timestamp).format('MMM DD\nHH:mm:ss');
+  
   const detailsText = log.details || '-';
   const sensorDataText = log.sensorData ? formatEnhancedSensorData(log.sensorData) : '-';
   
-  const detailsHeight = estimateEnhancedTextHeight(detailsText, colWidths[4] - 16, doc);
-  const dataHeight = estimateEnhancedTextHeight(sensorDataText, colWidths[5] - 16, doc);
-  const rowHeight = Math.max(baseRowHeight, detailsHeight + 20, dataHeight + 20);
+  const detailsHeight = estimateTextHeight(doc, detailsText, colWidths[4] - 16, 8);
+  const dataHeight = estimateTextHeight(doc, sensorDataText, colWidths[5] - 16, 8);
+  const rowHeight = Math.max(50, detailsHeight + 25, dataHeight + 25);
   
   const bgColor = index % 2 === 0 ? '#ffffff' : '#f8f9fa';
-  doc.rect(x, y, width, rowHeight)
-     .fillColor(bgColor)
-     .fill();
-  
-  doc.rect(x, y, width, rowHeight)
-     .strokeColor('#e9ecef')
-     .lineWidth(0.5)
-     .stroke();
+  doc.rect(x, y, width, rowHeight).fillColor(bgColor).fill();
+  doc.rect(x, y, width, rowHeight).strokeColor('#e9ecef').lineWidth(0.5).stroke();
   
   const statusColor = getStatusColor(log.status);
-  doc.rect(x, y, 4, rowHeight)
-     .fillColor(statusColor)
-     .fill();
+  doc.rect(x, y, 4, rowHeight).fillColor(statusColor).fill();
   
   const cellData = [
-    moment(log.timestamp).format('MMM DD\nHH:mm'),
+    formattedTimestamp,
     (log.type || '-').toUpperCase(),
     (log.action || '-').toUpperCase(),
     log.status || '-',
@@ -407,15 +400,14 @@ function drawEnhancedTableRow(doc, log, colWidths, x, y, width, index) {
   let currentX = x;
   cellData.forEach((text, i) => {
     if (i > 0) {
-      doc.moveTo(currentX, y)
-         .lineTo(currentX, y + rowHeight)
-         .strokeColor('#e9ecef')
-         .lineWidth(0.5)
-         .stroke();
+      doc.moveTo(currentX, y).lineTo(currentX, y + rowHeight)
+         .strokeColor('#e9ecef').lineWidth(0.5).stroke();
     }
     
     if (i === 3 && text !== '-') {
-      drawStatusBadge(doc, currentX + 8, y + 12, text, statusColor);
+      // Status column - center the badge vertically and pass maxWidth
+      const badgeY = y + (rowHeight / 2) - 7;
+      drawStatusBadge(doc, currentX, badgeY, text, statusColor, colWidths[i]);
     } else {
       const fontSize = i === 0 ? 9 : (i === 4 || i === 5 ? 8 : 10);
       const fontWeight = (i === 1 || i === 2) ? 'Helvetica-Bold' : 'Helvetica';
@@ -423,44 +415,47 @@ function drawEnhancedTableRow(doc, log, colWidths, x, y, width, index) {
       doc.fillColor('#333333')
          .font(fontWeight)
          .fontSize(fontSize)
-         .text(text, 
-               currentX + 8, 
-               y + 10, 
-               { 
-                 width: colWidths[i] - 16, 
-                 align: 'left',
-                 lineBreak: true,
-                 height: rowHeight - 20
-               });
+         .text(text, currentX + 8, y + 10, {
+           width: colWidths[i] - 16,
+           align: 'left',
+           lineBreak: true,
+           height: rowHeight - 20,
+           ellipsis: true
+         });
     }
-    
     currentX += colWidths[i];
   });
   
   return y + rowHeight;
 }
 
-function drawStatusBadge(doc, x, y, status, color) {
-  const badgeWidth = 60;
-  const badgeHeight = 18;
+function drawStatusBadge(doc, x, y, status, color, maxWidth) {
+  // Calculate actual badge width based on available column space
+  const padding = 4;
+  const actualBadgeWidth = Math.min(maxWidth - padding * 2, 45); // Max 45px width
+  const badgeHeight = 14;
   
-  doc.rect(x, y, badgeWidth, badgeHeight)
+  // Draw badge background
+  doc.rect(x + padding, y, actualBadgeWidth, badgeHeight)
      .fillColor(color)
-     .fillOpacity(0.1)
+     .fillOpacity(0.12)
      .fill()
      .strokeColor(color)
-     .strokeOpacity(0.3)
-     .lineWidth(1)
+     .strokeOpacity(0.35)
+     .lineWidth(0.5)
      .stroke()
      .fillOpacity(1)
      .strokeOpacity(1);
   
+  // Draw text centered in badge with strict width constraint
   doc.fillColor(color)
      .font('Helvetica-Bold')
-     .fontSize(9)
-     .text(status.toUpperCase(), x, y + 5, {
-       width: badgeWidth,
-       align: 'center'
+     .fontSize(7)
+     .text(status.toUpperCase(), x + padding, y + 3.5, {
+       width: actualBadgeWidth,
+       align: 'center',
+       lineBreak: false,
+       ellipsis: true
      });
 }
 
