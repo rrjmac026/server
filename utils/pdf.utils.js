@@ -1,5 +1,7 @@
 const moment = require('moment-timezone');
 
+// ============= PLANT MONITORING REPORT FUNCTIONS =============
+
 function generateReportPDF(doc, plantId, start, end, readings) {
   let currentY = drawPageHeader(doc, 1, 'Plant Monitoring Report');
   currentY += 30;
@@ -170,7 +172,8 @@ function drawPageFooter(doc, timestamp) {
   doc.text('Confidential Report', pageWidth - 250, footerY + 10, { width: 200, align: 'right' });
 }
 
-// Audit Log PDF functions (simplified versions of the enhanced ones)
+// ============= AUDIT LOG PDF FUNCTIONS =============
+
 function generateAuditLogsPDF(doc, logs, plantId, start, end, type) {
   let currentY = drawEnhancedAuditHeader(doc, 1);
   currentY = drawAuditSummarySection(doc, currentY, logs, plantId, start, end, type);
@@ -178,7 +181,6 @@ function generateAuditLogsPDF(doc, logs, plantId, start, end, type) {
   drawEnhancedFooter(doc);
 }
 
-// Enhanced Audit Log PDF Functions
 function drawEnhancedAuditHeader(doc, pageNumber) {
   const pageWidth = doc.page.width;
   const headerHeight = 120;
@@ -301,15 +303,16 @@ function drawEnhancedTableHeader(doc, headers, colWidths, x, y, width) {
 }
 
 function drawEnhancedTableRow(doc, log, colWidths, x, y, width, index) {
-  const baseRowHeight = 45;
+  // Fixed timestamp format: Added space between date and time
+  const formattedTimestamp = moment(log.timestamp).format('MMM DD\nHH:mm');
+  
   const detailsText = log.details || '-';
   const sensorDataText = log.sensorData ? formatEnhancedSensorData(log.sensorData) : '-';
   
-  const detailsHeight = estimateTextHeight(detailsText, colWidths[4] - 20, doc, 8);
-  const dataHeight = estimateTextHeight(sensorDataText, colWidths[5] - 20, doc, 8);
-  const timestampHeight = estimateTextHeight(moment(log.timestamp).format('MMM: DD\nHH:mm:ss'), colWidths[0] - 20, doc, 9);
-  
-  const rowHeight = Math.max(baseRowHeight, detailsHeight + 15, dataHeight + 15, timestampHeight + 15);
+  // Calculate dynamic row height based on content
+  const detailsHeight = estimateTextHeight(doc, detailsText, colWidths[4] - 16, 8);
+  const dataHeight = estimateTextHeight(doc, sensorDataText, colWidths[5] - 16, 8);
+  const rowHeight = Math.max(50, detailsHeight + 25, dataHeight + 25);
   
   const bgColor = index % 2 === 0 ? '#ffffff' : '#f8f9fa';
   doc.rect(x, y, width, rowHeight).fillColor(bgColor).fill();
@@ -319,7 +322,7 @@ function drawEnhancedTableRow(doc, log, colWidths, x, y, width, index) {
   doc.rect(x, y, 4, rowHeight).fillColor(statusColor).fill();
   
   const cellData = [
-    moment(log.timestamp).format('MMM: DD\nHH:mm:ss'),
+    formattedTimestamp,
     (log.type || '-').toUpperCase(),
     (log.action || '-').toUpperCase(),
     log.status || '-',
@@ -334,56 +337,26 @@ function drawEnhancedTableRow(doc, log, colWidths, x, y, width, index) {
     }
     
     if (i === 3 && text !== '-') {
-      drawStatusBadge(doc, currentX + 8, y + (rowHeight / 2) - 9, text, statusColor);
+      drawStatusBadge(doc, currentX + 8, y + 12, text, statusColor);
     } else {
       const fontSize = i === 0 ? 9 : (i === 4 || i === 5 ? 8 : 10);
       const fontWeight = (i === 1 || i === 2) ? 'Helvetica-Bold' : 'Helvetica';
-      doc.fillColor('#333333').font(fontWeight).fontSize(fontSize)
-         .text(text, currentX + 8, y + 8, { width: colWidths[i] - 16, align: 'left', lineBreak: true, height: rowHeight - 16 });
+      
+      doc.fillColor('#333333')
+         .font(fontWeight)
+         .fontSize(fontSize)
+         .text(text, currentX + 8, y + 10, {
+           width: colWidths[i] - 16,
+           align: 'left',
+           lineBreak: true,
+           height: rowHeight - 20,
+           ellipsis: true
+         });
     }
     currentX += colWidths[i];
   });
   
   return y + rowHeight;
-}
-
-function estimateTextHeight(text, maxWidth, doc, fontSize = 8) {
-  const lineHeight = fontSize * 1.5;
-  if (!text || text === '-') return lineHeight;
-  
-  const lines = text.split('\n');
-  let totalLines = 0;
-  
-  lines.forEach(line => {
-    if (!line.trim()) {
-      totalLines += 1;
-      return;
-    }
-    
-    const words = line.split(' ');
-    let currentLine = '';
-    let lineCount = 1;
-    
-    words.forEach(word => {
-      const testLine = currentLine + (currentLine ? ' ' : '') + word;
-      const width = doc.widthOfString(testLine, { fontSize });
-      
-      if (width > maxWidth) {
-        if (currentLine) {
-          lineCount++;
-          currentLine = word;
-        } else {
-          currentLine = word;
-        }
-      } else {
-        currentLine = testLine;
-      }
-    });
-    
-    totalLines += lineCount;
-  });
-  
-  return totalLines * lineHeight;
 }
 
 function drawStatusBadge(doc, x, y, status, color) {
@@ -408,12 +381,28 @@ function formatEnhancedSensorData(sensorData) {
   if (!sensorData) return '-';
   const items = [];
   if (sensorData.moisture !== undefined) items.push(`Moisture: ${sensorData.moisture}%`);
-  if (sensorData.temperature !== undefined) items.push(`Temp: ${sensorData.temperature}C`);
+  if (sensorData.temperature !== undefined) items.push(`Temp: ${sensorData.temperature}°C`);
   if (sensorData.humidity !== undefined) items.push(`Humidity: ${sensorData.humidity}%`);
   if (sensorData.moistureStatus) items.push(`Status: ${sensorData.moistureStatus}`);
   if (sensorData.waterState !== undefined) items.push(`Water: ${sensorData.waterState ? 'ON' : 'OFF'}`);
-  if (sensorData.fertilizerState !== undefined) items.push(`Fertilizer: ${sensorData.fertilizerState ? 'ON' : 'OFF'}`);
+  if (sensorData.fertilizerState !== undefined) items.push(`Fert: ${sensorData.fertilizerState ? 'ON' : 'OFF'}`);
   return items.join('\n');
+}
+
+function estimateTextHeight(doc, text, maxWidth, fontSize) {
+  if (!text || text === '-') return fontSize * 1.4;
+  
+  const lineHeight = fontSize * 1.4;
+  const lines = text.split('\n');
+  let totalLines = 0;
+  
+  lines.forEach(line => {
+    const approxCharsPerLine = Math.floor(maxWidth / (fontSize * 0.5));
+    const linesNeeded = Math.ceil(line.length / approxCharsPerLine) || 1;
+    totalLines += linesNeeded;
+  });
+  
+  return totalLines * lineHeight;
 }
 
 function drawEnhancedFooter(doc) {
@@ -438,5 +427,16 @@ module.exports = {
   drawPageHeader,
   drawPageFooter,
   drawTableHeader,
-  drawTableRow
+  drawTableRow,
+  drawEnhancedAuditHeader,
+  drawEnhancedFooter,
+  drawAuditSummarySection,
+  drawAuditLogsTable,
+  drawSummaryCard,
+  drawEnhancedTableHeader,
+  drawEnhancedTableRow,
+  drawStatusBadge,
+  getStatusColor,
+  formatEnhancedSensorData,
+  estimateTextHeight
 };
