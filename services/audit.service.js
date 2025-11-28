@@ -10,10 +10,6 @@ const dedupConfig = require('../config/deduplication.config');
 const DEDUP_WINDOW_MS = dedupConfig.audit.dedupWindowMs;
 const ALWAYS_STORE_TYPES = dedupConfig.audit.alwaysStore;
 
-// ✅ IMPORTANT: Sensor audit logs are NEVER deduplicated
-// If a sensor reading passed deduplication and was stored,
-// its audit log should ALWAYS be created
-
 /**
  * Generate a unique fingerprint for an audit log entry
  * Used to detect exact duplicates
@@ -45,15 +41,8 @@ function generateAuditFingerprint(data) {
  * Check if an audit log is a duplicate within the deduplication window
  */
 async function isDuplicateAuditLog(data) {
-  // ✅ FIXED: Never deduplicate sensor audit logs
-  // Sensor readings that passed deduplication should ALWAYS create audit logs
-  const logType = String(data.type || '').toLowerCase();
-  
-  if (logType === 'sensor') {
-    return false; // Never deduplicate sensor audit logs
-  }
-  
   // Check if this type should always be stored (no deduplication)
+  const logType = String(data.type || '').toLowerCase();
   const actionKey = `${logType}-${String(data.action || '').toLowerCase()}`;
   
   if (ALWAYS_STORE_TYPES.includes(logType) || ALWAYS_STORE_TYPES.includes(actionKey)) {
@@ -104,55 +93,53 @@ function sanitizeAuditLog(log) {
 
 /**
  * Create an audit log entry with deduplication
- * FIXED: Sensor readings that passed deduplication ALWAYS create audit logs
  */
-async function createAuditLog(data) {
-  const collection = await getCollection('audit_logs');
+// async function createAuditLog(data) {
+//   const collection = await getCollection('audit_logs');
   
-  // ✅ FIXED: Check for general duplicate audit logs
-  // BUT sensor readings are NEVER considered duplicates
-  const isDuplicate = await isDuplicateAuditLog(data);
+//   // Check for duplicate before creating
+//   const isDuplicate = await isDuplicateAuditLog(data);
   
-  if (isDuplicate) {
-    if (dedupConfig.logging.logDuplicates) {
-      console.log(`⚠️  Duplicate audit log detected and skipped:`, {
-        plantId: data.plantId,
-        type: data.type,
-        action: data.action,
-        status: data.status
-      });
-    }
+//   if (isDuplicate) {
+//     if (dedupConfig.logging.logDuplicates) {
+//       console.log(`⚠️  Duplicate audit log detected and skipped:`, {
+//         plantId: data.plantId,
+//         type: data.type,
+//         action: data.action,
+//         status: data.status
+//       });
+//     }
     
-    return {
-      insertedId: null,
-      data: null,
-      isDuplicate: true,
-      message: 'Duplicate audit log detected and skipped'
-    };
-  }
+//     return {
+//       insertedId: null,
+//       data: null,
+//       isDuplicate: true,
+//       message: 'Duplicate audit log detected and skipped'
+//     };
+//   }
   
-  const logData = sanitizeAuditLog({
-    ...data,
-    timestamp: moment().tz('Asia/Manila').toDate()
-  });
+//   const logData = sanitizeAuditLog({
+//     ...data,
+//     timestamp: moment().tz('Asia/Manila').toDate()
+//   });
 
-  const result = await collection.insertOne(logData);
+//   const result = await collection.insertOne(logData);
   
-  if (dedupConfig.logging.logReason) {
-    console.log(`✅ Audit log created:`, {
-      id: result.insertedId,
-      plantId: logData.plantId,
-      type: logData.type,
-      action: logData.action
-    });
-  }
+//   if (dedupConfig.logging.logReason) {
+//     console.log(`✅ Audit log created:`, {
+//       id: result.insertedId,
+//       plantId: logData.plantId,
+//       type: logData.type,
+//       action: logData.action
+//     });
+//   }
   
-  return {
-    insertedId: result.insertedId,
-    data: logData,
-    isDuplicate: false
-  };
-}
+//   return {
+//     insertedId: result.insertedId,
+//     data: logData,
+//     isDuplicate: false
+//   };
+// }
 
 /**
  * Get audit logs with filtering and pagination
@@ -245,7 +232,7 @@ async function exportAuditLogs(req, res) {
     success: true,
     logs: logs.map(log => ({
       ...log,
-      timestamp: moment(log.timestamp).tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss')
+      timestamp: moment(log.timestamp).tz('Asia/Manila').format('YYYY-MM-DD HH:mm:ss') // Added seconds
     }))
   });
 }
@@ -284,11 +271,6 @@ async function cleanupDuplicateAuditLogs() {
   const duplicateIds = [];
   
   for (const log of allLogs) {
-    // ✅ FIXED: Never consider sensor logs as duplicates
-    if (log.type === 'sensor') {
-      continue;
-    }
-    
     const fingerprint = generateAuditFingerprint(log);
     const lastSeen = seen.get(fingerprint);
     
@@ -315,6 +297,111 @@ async function cleanupDuplicateAuditLogs() {
   console.log('✨ No duplicate audit logs found');
   return 0;
 }
+
+async function isDuplicateSensorAudit(data) {
+  // Only check duplicates for sensor-type audit logs
+  if (data.type !== 'sensor' || !data.sensorData) {
+    return false;
+  }
+  
+  const collection = await getCollection('audit_logs');
+  
+  // Find the most recent sensor audit log for this plant
+  const lastSensorAudit = await collection.findOne(
+    { 
+      plantId: data.plantId,
+      type: 'sensor'
+    },
+    { sort: { timestamp: -1 } }
+  );
+  
+  // If no previous sensor audit, this is not a duplicate
+  if (!lastSensorAudit || !lastSensorAudit.sensorData) {
+    return false;
+  }
+  
+  // Compare sensor values
+  const current = data.sensorData;
+  const previous = lastSensorAudit.sensorData;
+  
+  const isSame = 
+    current.moisture === previous.moisture &&
+    current.temperature === previous.temperature &&
+    current.humidity === previous.humidity &&
+    current.moistureStatus === previous.moistureStatus &&
+    Boolean(current.waterState) === Boolean(previous.waterState) &&
+    Boolean(current.fertilizerState) === Boolean(previous.fertilizerState);
+  
+  if (isSame) {
+    console.log(`⚠️  Sensor audit log skipped - no changes detected for ${data.plantId}`);
+    return true;
+  }
+  
+  return false;
+}
+
+/**
+ * Create an audit log entry with deduplication
+ * Now includes sensor reading deduplication
+ */
+async function createAuditLog(data) {
+  const collection = await getCollection('audit_logs');
+  
+  // Check for duplicate sensor readings (NEW)
+  const isDuplicateSensor = await isDuplicateSensorAudit(data);
+  if (isDuplicateSensor) {
+    return {
+      insertedId: null,
+      data: null,
+      isDuplicate: true,
+      message: 'Sensor reading unchanged - audit log skipped'
+    };
+  }
+  
+  // Check for general duplicate audit logs
+  const isDuplicate = await isDuplicateAuditLog(data);
+  
+  if (isDuplicate) {
+    if (dedupConfig.logging.logDuplicates) {
+      console.log(`⚠️  Duplicate audit log detected and skipped:`, {
+        plantId: data.plantId,
+        type: data.type,
+        action: data.action,
+        status: data.status
+      });
+    }
+    
+    return {
+      insertedId: null,
+      data: null,
+      isDuplicate: true,
+      message: 'Duplicate audit log detected and skipped'
+    };
+  }
+  
+  const logData = sanitizeAuditLog({
+    ...data,
+    timestamp: moment().tz('Asia/Manila').toDate()
+  });
+
+  const result = await collection.insertOne(logData);
+  
+  if (dedupConfig.logging.logReason) {
+    console.log(`✅ Audit log created:`, {
+      id: result.insertedId,
+      plantId: logData.plantId,
+      type: logData.type,
+      action: logData.action
+    });
+  }
+  
+  return {
+    insertedId: result.insertedId,
+    data: logData,
+    isDuplicate: false
+  };
+}
+
 
 module.exports = {
   createAuditLog,
