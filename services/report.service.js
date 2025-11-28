@@ -147,16 +147,16 @@ async function generateReport(req, res, plantId, start, end, format) {
     }
   }
 
-  // Log report generation - using Philippines time
+  const readings = await getAllReadingsInRange(plantId, start, end);
+
+  // Log report generation AFTER getting readings - using Philippines time
   await auditService.createAuditLog({
     plantId: plantId,
     type: 'report',
     action: 'generate',
     status: 'success',
-    details: `Generated ${format.toUpperCase()} report from ${start} to ${end}`
+    details: `Generated ${format.toUpperCase()} report from ${start} to ${end} (${readings.length} readings)`
   });
-
-  const readings = await getAllReadingsInRange(plantId, start, end);
 
   if (!readings || readings.length === 0) {
     if (format === 'json') {
