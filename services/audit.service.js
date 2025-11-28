@@ -10,6 +10,10 @@ const dedupConfig = require('../config/deduplication.config');
 const DEDUP_WINDOW_MS = dedupConfig.audit.dedupWindowMs;
 const ALWAYS_STORE_TYPES = dedupConfig.audit.alwaysStore;
 
+// ✅ IMPORTANT: Sensor audit logs are NEVER deduplicated
+// If a sensor reading passed deduplication and was stored,
+// its audit log should ALWAYS be created
+
 /**
  * Generate a unique fingerprint for an audit log entry
  * Used to detect exact duplicates
@@ -27,7 +31,7 @@ function generateAuditFingerprint(data) {
     fingerprint.sensorData = {
       moisture: data.sensorData.moisture,
       temperature: data.sensorData.temperature,
-      humidity: data.humidity,
+      humidity: data.sensorData.humidity,
       waterState: Boolean(data.sensorData.waterState),
       fertilizerState: Boolean(data.sensorData.fertilizerState)
     };
@@ -41,8 +45,15 @@ function generateAuditFingerprint(data) {
  * Check if an audit log is a duplicate within the deduplication window
  */
 async function isDuplicateAuditLog(data) {
-  // Check if this type should always be stored (no deduplication)
+  // ✅ FIXED: Never deduplicate sensor audit logs
+  // Sensor readings that passed deduplication should ALWAYS create audit logs
   const logType = String(data.type || '').toLowerCase();
+  
+  if (logType === 'sensor') {
+    return false; // Never deduplicate sensor audit logs
+  }
+  
+  // Check if this type should always be stored (no deduplication)
   const actionKey = `${logType}-${String(data.action || '').toLowerCase()}`;
   
   if (ALWAYS_STORE_TYPES.includes(logType) || ALWAYS_STORE_TYPES.includes(actionKey)) {
@@ -93,15 +104,13 @@ function sanitizeAuditLog(log) {
 
 /**
  * Create an audit log entry with deduplication
- * FIXED: Removed isDuplicateSensorAudit check - sensor changes should always be logged
+ * FIXED: Sensor readings that passed deduplication ALWAYS create audit logs
  */
 async function createAuditLog(data) {
   const collection = await getCollection('audit_logs');
   
-  // ✅ REMOVED: isDuplicateSensorAudit check
-  // Sensor readings with changes should ALWAYS create audit logs
-  
-  // Check for general duplicate audit logs (non-sensor or exact duplicates)
+  // ✅ FIXED: Check for general duplicate audit logs
+  // BUT sensor readings are NEVER considered duplicates
   const isDuplicate = await isDuplicateAuditLog(data);
   
   if (isDuplicate) {
@@ -275,6 +284,11 @@ async function cleanupDuplicateAuditLogs() {
   const duplicateIds = [];
   
   for (const log of allLogs) {
+    // ✅ FIXED: Never consider sensor logs as duplicates
+    if (log.type === 'sensor') {
+      continue;
+    }
+    
     const fingerprint = generateAuditFingerprint(log);
     const lastSeen = seen.get(fingerprint);
     
